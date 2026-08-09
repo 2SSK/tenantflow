@@ -1,0 +1,177 @@
+name: tenantflow
+
+services:
+  # ==========================================================================
+  # 1) PostgreSQL — shared storage for Temporal AND our app DB
+  # ==========================================================================
+  postgres:
+    image: postgres:${POSTGRESQL_VERSION}
+    container_name: tenantflow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+    networks:
+      - tenantflow
+    logging:
+      driver: "local"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+  # ==========================================================================
+  # 2) temporal-schema-setup — ONE-SHOT. Creates DBs + schema, then exits.
+  #    creates the database itself if it doesn't exist.
+  # ==========================================================================
+  temporal-schema-setup:
+    image: temporalio/admin-tools:${TEMPORAL_VERSION}
+    container_name: tenantflow-temporal-schema-setup
+    restart: on-failure:6 # retry a few times, then stop loudly
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: "5432" # INTERNAL port - never change this
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PWD: ${POSTGRES_PASSWORD}
+      POSTGRES_SEEDS: postgres # service name = DNS name on the network
+      SQL_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./deploy/temporal/scripts:/scripts:ro
+    entrypoint: ["/bin/sh"] # run via sh, avoids bind-mount exec perms
+    command: /scripts/setup-postgres.sh
+    networks:
+      - tenantflow
+
+  # ==========================================================================
+  # 3) temporal — the workflow server. Starts ONLY after schema setup succeeded.
+  # ==========================================================================
+  temporal:
+    image: temporalio/server:${TEMPORAL_VERSION}
+    container_name: tenantflow-temporal
+    restart: unless-stopped
+    depends_on:
+      temporal-schema-setup:
+        condition: service_completed_successfully
+    environment:
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PWD: ${POSTGRES_PASSWORD}
+      POSTGRES_SEEDS: postgres
+      BIND_ON_IP: 0.0.0.0
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yml
+    ports:
+      - "${TEMPORAL_PORT}:7233"
+    volumes:
+      - ./deploy/temporal/dynamicconfig:/etc/temporal/config/dynamicconfig:ro
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "7233"]
+      interval: 5s
+      timeout: 3s
+      start_period: 30s
+      retries: 60
+    networks:
+      - tenantflow
+    logging:
+      driver: "local"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+  # ==========================================================================
+  # 4) temporal-admin-tools — interactive CLI shell. Stays running, idle.
+  # ==========================================================================
+  temporal-admin-tools:
+    image: temporalio/admin-tools:${TEMPORAL_VERSION}
+    container_name: tenantflow-temporal-admin-tools
+    restart: unless-stopped
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CLI_ADDRESS: temporal:7233
+    stdin_open: true
+    tty: true
+    networks:
+      - tenantflow
+
+  # ==========================================================================
+  # 5) temporal-create-namespace — ONE-SHOT. Registers namespaces, then exits.
+  #    Runs AFTER the server is healthy because namespace creation is an API
+  #    call to the running server — it can't happen before the server exists.
+  # ==========================================================================
+  temporal-create-namespace:
+    image: temporalio/admin-tools:${TEMPORAL_VERSION}
+    container_name: tenantflow-temporal-create-namespace
+    restart: on-failure:5
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      NAMESPACES: ${TEMPORAL_NAMESPACES:-default}
+    volumes:
+      - ./deploy/temporal/scripts:/scripts:ro
+    entrypoint: ["/bin/sh"]
+    command: /scripts/create-namespace.sh
+    networks:
+      - tenantflow
+
+  # ==========================================================================
+  # 6) temporal-ui — web dashboard.
+  # ==========================================================================
+  temporal-ui:
+    image: temporalio/ui:${TEMPORAL_UI_VERSION}
+    container_name: tenantflow-temporal-ui
+    restart: unless-stopped
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:3000
+    ports:
+      - "${TEMPORAL_UI_PORT}:8080"
+    networks:
+      - tenantflow
+
+  # ==========================================================================
+  # 7) keycloak — our IAM, booted now so the stack is ready when we reach
+  #    the auth phase. start-dev = dev mode (no TLS, auto-reload).
+  # ==========================================================================
+  keycloak:
+    image: quay.io/keycloak/keycloak:${KEYCLOAK_VERSION}
+    container_name: tenantflow-keycloak
+    restart: unless-stopped
+    command: start-dev
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KC_HOSTNAME: localhost
+    ports:
+      - "${KEYCLOAK_PORT}:8080"
+    volumes:
+      - keycloak_data:/opt/keycloak/data
+    networks:
+      - tenantflow
+
+volumes:
+  postgres_data:
+  keycloak_data:
+
+networks:
+  tenantflow:
+    name: tenantflow

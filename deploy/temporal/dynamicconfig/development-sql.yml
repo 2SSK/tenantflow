@@ -1,0 +1,6 @@
+# Dynamic config: server behavior you can change at runtime without restarting.
+# Dev - minimal. Production adds RPS limits, queue partitioning, retention, etc.
+
+system.forceSearchAttributesCacheRefreshOnRead:
+  - value: true
+    constraints: {}
