@@ -10,6 +10,9 @@ import (
 type Config struct {
 	Env      string
 	HTTPPort int
+
+	TemporalAddress   string
+	TemporalNamespace string
 }
 
 // Load reads configuration from the process environment.
@@ -24,6 +27,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg.HTTPPort = port
+
+	cfg.TemporalAddress = getEnv("TENANTFLOW_TEMPORAL_ADDRESS", "localhost:7233")
+	cfg.TemporalNamespace = getEnv("TENANTFLOW_TEMPORAL_NAMESPACE", "default")
 
 	if cfg.Env != "development" && cfg.Env != "production" {
 		return Config{}, fmt.Errorf("TENANTFLOW_ENV must be development or production, got %q", cfg.Env)

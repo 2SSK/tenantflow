@@ -14,6 +14,7 @@ import (
 	"github.com/2SSK/tenantflow/internal/logger"
 	"github.com/2SSK/tenantflow/internal/middleware"
 	"github.com/2SSK/tenantflow/internal/router"
+	"github.com/2SSK/tenantflow/internal/temporal"
 )
 
 func main() {
@@ -24,6 +25,8 @@ func main() {
 }
 
 func run() error {
+	ctx := context.Background()
+
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -32,6 +35,13 @@ func run() error {
 	log := logger.New(cfg.Env, os.Stdout)
 	slog.SetDefault(log)
 	log.Info("tenantflow api starting", "env", cfg.Env, "port", cfg.HTTPPort)
+
+	tc, err := temporal.New(ctx, cfg, log)
+	if err != nil {
+		return fmt.Errorf("temporal: %w", err)
+	}
+	defer tc.Close()
+	log.Info("temporal connected", "address", cfg.TemporalAddress, "namespace", cfg.TemporalNamespace)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),

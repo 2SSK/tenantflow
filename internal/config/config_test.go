@@ -26,7 +26,34 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.HTTPPort != 9090 {
 		t.Errorf("expected default port 9090, got %d", cfg.HTTPPort)
 	}
+
 	if cfg.Env != "development" {
 		t.Errorf("expected default env 'development', got %q", cfg.Env)
+	}
+
+	if cfg.TemporalAddress != "localhost:7233" {
+		t.Errorf("expected default temporal address localhost:7233, got %q", cfg.TemporalAddress)
+	}
+
+	if cfg.TemporalNamespace != "default" {
+		t.Errorf("expected default temporal namespace 'default', got %q", cfg.TemporalNamespace)
+	}
+}
+
+func TestLoadTemporalOverrides(t *testing.T) {
+	t.Setenv("TENANTFLOW_TEMPORAL_ADDRESS", "temporal.example.com:7233")
+	t.Setenv("TENANTFLOW_TEMPORAL_NAMESPACE", "prod")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.TemporalAddress != "temporal.example.com:7233" {
+		t.Errorf("expected overridden address, got %q", cfg.TemporalAddress)
+	}
+
+	if cfg.TemporalNamespace != "prod" {
+		t.Errorf("expected overridden namespace, got %q", cfg.TemporalNamespace)
 	}
 }
