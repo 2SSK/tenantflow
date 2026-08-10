@@ -1,0 +1,66 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/2SSK/tenantflow/internal/config"
+	"github.com/2SSK/tenantflow/internal/logger"
+	"github.com/2SSK/tenantflow/internal/middleware"
+	"github.com/2SSK/tenantflow/internal/router"
+)
+
+func main() {
+	if err := run(); err != nil {
+		slog.Error("fatal", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+
+	log := logger.New(cfg.Env, os.Stdout)
+	slog.SetDefault(log)
+	log.Info("tenantflow api starting", "env", cfg.Env, "port", cfg.HTTPPort)
+
+	srv := &http.Server{
+		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),
+		Handler:           middleware.RequestLogger(log, router.New()),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		log.Info("listening", "addr", srv.Addr)
+		errCh <- srv.ListenAndServe()
+	}()
+
+	stopCh := make(chan os.Signal, 1)
+	signal.Notify(stopCh, os.Interrupt, syscall.SIGTERM)
+
+	select {
+	case err := <-errCh:
+		return fmt.Errorf("server: %w", err)
+	case sig := <-stopCh:
+		log.Info("shutdown requested", "signal", sig.String())
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		return fmt.Errorf("graceful shutdown: %w", err)
+	}
+
+	log.Info("shutdown complete")
+	return nil
+}
