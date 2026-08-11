@@ -168,6 +168,29 @@ services:
     networks:
       - tenantflow
 
+  # ==========================================================================
+  # 8) app-db-init. Creates the TenantFlow control-plane database
+  # ==========================================================================
+  app-db-init:
+    image: postgres:${POSTGRESQL_VERSION}
+    container_name: tenantflow-app-db-init
+    restart: on-failure:5
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if ! psql -h postgres -U "${POSTGRES_USER}" -d postgres -v ON_ERROR_STOP=1 \
+          -tAc "SELECT 1 FROM pg_database WHERE datname = 'tenantflow'" | grep -q 1; then
+          psql -h postgres -U "${POSTGRES_USER}" -d postgres -v ON_ERROR_STOP=1 \
+            -c "CREATE DATABASE tenantflow"
+        fi
+    networks:
+      - tenantflow
+
 volumes:
   postgres_data:
   keycloak_data:

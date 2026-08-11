@@ -10,7 +10,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
+
 	"github.com/2SSK/tenantflow/internal/config"
+	"github.com/2SSK/tenantflow/internal/database"
 	"github.com/2SSK/tenantflow/internal/logger"
 	"github.com/2SSK/tenantflow/internal/middleware"
 	"github.com/2SSK/tenantflow/internal/router"
@@ -27,6 +30,10 @@ func main() {
 func run() error {
 	ctx := context.Background()
 
+	if err := godotenv.Load(); err != nil {
+		slog.Warn("no .env file found, relying on environment", "error", err)
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -42,6 +49,12 @@ func run() error {
 	}
 	defer tc.Close()
 	log.Info("temporal connected", "address", cfg.TemporalAddress, "namespace", cfg.TemporalNamespace)
+
+	db, err := database.New(ctx, cfg.DatabaseURL, log)
+	if err != nil {
+		return fmt.Errorf("database: %w", err)
+	}
+	defer db.Close()
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),

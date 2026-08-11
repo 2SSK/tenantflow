@@ -8,11 +8,11 @@ import (
 
 // Config holds all runtime settings for the API.
 type Config struct {
-	Env      string
-	HTTPPort int
-
+	Env               string
+	HTTPPort          int
 	TemporalAddress   string
 	TemporalNamespace string
+	DatabaseURL       string
 }
 
 // Load reads configuration from the process environment.
@@ -30,6 +30,8 @@ func Load() (Config, error) {
 
 	cfg.TemporalAddress = getEnv("TENANTFLOW_TEMPORAL_ADDRESS", "localhost:7233")
 	cfg.TemporalNamespace = getEnv("TENANTFLOW_TEMPORAL_NAMESPACE", "default")
+
+	cfg.DatabaseURL = getEnv("TENANTFLOW_DATABASE_URL", "postgres://tenantflow:tenantflow@localhost:5432/tenantflow?sslmode=disable")
 
 	if cfg.Env != "development" && cfg.Env != "production" {
 		return Config{}, fmt.Errorf("TENANTFLOW_ENV must be development or production, got %q", cfg.Env)
