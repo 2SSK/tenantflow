@@ -2,7 +2,10 @@ module github.com/2SSK/tenantflow
 
 go 1.26.5
 
-require go.temporal.io/sdk v1.47.0
+require (
+	go.temporal.io/api v1.63.4
+	go.temporal.io/sdk v1.47.0
+)
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
@@ -18,7 +21,6 @@ require (
 	github.com/robfig/cron v1.2.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/stretchr/testify v1.10.0 // indirect
-	go.temporal.io/api v1.63.4 // indirect
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
