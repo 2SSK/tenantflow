@@ -3,15 +3,20 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/joho/godotenv"
 	"log/slog"
 	"os"
 
+	"github.com/joho/godotenv"
+
+	"github.com/2SSK/tenantflow/internal/activities"
 	"github.com/2SSK/tenantflow/internal/config"
 	"github.com/2SSK/tenantflow/internal/database"
 	"github.com/2SSK/tenantflow/internal/logger"
+	"github.com/2SSK/tenantflow/internal/repository"
 	"github.com/2SSK/tenantflow/internal/temporal"
 	tfworkflow "github.com/2SSK/tenantflow/internal/workflow"
+
+	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/worker"
 )
 
@@ -43,7 +48,6 @@ func run() error {
 		return fmt.Errorf("temporal: %w", err)
 	}
 	defer tc.Close()
-	log.Info("temporal created", "address", cfg.TemporalAddress, "namespace", cfg.TemporalNamespace)
 
 	db, err := database.New(ctx, cfg.DatabaseURL, log)
 	if err != nil {
@@ -51,10 +55,22 @@ func run() error {
 	}
 	defer db.Close()
 
-	// A worker = one process polling one task queue.
+	// Dependency chain: pool -> repository -> activities
+	repo := repository.NewPostgresTenantRepository(db.Pool)
+	acts := activities.NewProvisionActivities(repo)
+
 	w := worker.New(tc.Client, tfworkflow.TaskQueue, worker.Options{})
 	w.RegisterWorkflow(tfworkflow.ProvisionTenantWorkflow)
-	w.RegisterActivity(tfworkflow.ProvisionActivity)
+
+	w.RegisterActivityWithOptions(acts.CreateTenantRecord, activity.RegisterOptions{
+		Name: activities.CreateTenantRecordActivityName,
+	})
+	w.RegisterActivityWithOptions(acts.ProvisionTenant, activity.RegisterOptions{
+		Name: activities.ProvisionTenantActivityName,
+	})
+	w.RegisterActivityWithOptions(acts.MarkTenantActive, activity.RegisterOptions{
+		Name: activities.MarkTenantActiveActivityName,
+	})
 
 	log.Info("worker polling", "taskQueue", tfworkflow.TaskQueue)
 	if err := w.Run(worker.InterruptCh()); err != nil {

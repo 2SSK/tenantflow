@@ -1,8 +1,8 @@
 # TenantFlow — Multi-Tenant SaaS Control Plane
 
-> **One-liner:** **TenantFlow — a Kubernetes-inspired control plane** that automates the *complete lifecycle* of SaaS tenants (provision → upgrade → **migrate** → backup → restore → delete) using **Temporal workflows, Saga compensations, PostgreSQL, Docker, and Keycloak IAM**, wrapped in a full-stack dashboard.
+> **One-liner:** **TenantFlow — a Kubernetes-inspired control plane** that automates the _complete lifecycle_ of SaaS tenants (provision → upgrade → **migrate** → backup → restore → delete) using **Temporal workflows, Saga compensations, PostgreSQL, Docker, and Keycloak IAM**, wrapped in a full-stack dashboard.
 >
-> **Career goal this serves:** grow from DevOps/SRE → Platform Engineering, while building real fullstack skills. This is the "mini Kubernetes-for-tenants" project: instead of managing VMs, you manage *tenants*.
+> **Career goal this serves:** grow from DevOps/SRE → Platform Engineering, while building real fullstack skills. This is the "mini Kubernetes-for-tenants" project: instead of managing VMs, you manage _tenants_.
 
 **Created:** 2026-08-02
 **Updated:** 2026-08-02 (Keycloak IAM added; portfolio review incorporated — migration workflow, backup verification, DLQ, workflow versioning, cost view)
@@ -36,7 +36,7 @@
 
 ### Why this project (not another e-commerce saga)
 
-- **Day job is already infra.** We run PostgreSQL HA + Temporal + monitoring at Amoga. This project turns that ops experience into a *product* we designed ourselves.
+- **Day job is already infra.** We run PostgreSQL HA + Temporal + monitoring at Amoga. This project turns that ops experience into a _product_ we designed ourselves.
 - **Amoga domain fit.** Amoga is a multi-tenant, low-code enterprise platform (one platform, many customer orgs, strong isolation + governance). Tenant lifecycle automation is literally the platform-engineering layer of that kind of business.
 - **The stacks we master in one project:**
   1. **Multitenancy** — database-per-tenant AND shared-schema isolation modes, implemented, not just discussed.
@@ -82,13 +82,13 @@ Azure Resource Manager                     Docker Engine
   └─ ...                                   └─ docker exec → health checks
 ```
 
-This is **not cheating** — the important thing is the *abstraction*. We define a `CloudProvider` interface. `DockerProvider` implements it. A future `AzureProvider` implements the same interface. That interface + its semantics (async, failure modes, idempotency) is the platform-engineering part.
+This is **not cheating** — the important thing is the _abstraction_. We define a `CloudProvider` interface. `DockerProvider` implements it. A future `AzureProvider` implements the same interface. That interface + its semantics (async, failure modes, idempotency) is the platform-engineering part.
 
 ### What Temporal adds
 
 - **Durability** — a workflow that's half-way through survives a server restart; it resumes where it left off (event-sourced execution history).
 - **Retries** — Activities retry automatically with backoff. A transient network blip doesn't fail the whole run.
-- **Saga compensation** — Temporal lets us model the *forward* path cleanly; on failure we run the reverse path (compensation activities).
+- **Saga compensation** — Temporal lets us model the _forward_ path cleanly; on failure we run the reverse path (compensation activities).
 - **Long waits** — a "wait 30 days before deleting data" step costs nothing (Temporal timers).
 - **Visibility** — every step is an event in the workflow history → we can stream it to the UI and store it in PostgreSQL as an audit trail.
 
@@ -161,7 +161,7 @@ Key rule we will implement: **every non-idempotent forward step gets a matching 
 5. Service calls TenantService.CreateTenant
 6. Repository inserts `tenants` row (status = pending)
 7. Service starts Temporal Workflow (TenantProvisionWorkflow)
-8. Handler responds: HTTP 202 { tenantId, workflowId }   ← instant, async
+8. Handler responds: HTTP 202 { tenantID, workflowID }   ← instant, async
 9. Worker executes Activities against Docker (+ Keycloak admin API for identity)
 10. Each Activity writes an `audit_events` row
 11. Workflow completes → tenant status = active
@@ -188,27 +188,27 @@ No orphaned DBs/containers/identities — the system is clean
 
 ## 4. Technology Stack
 
-| Component          | Tech                              | Why |
-|--------------------|-----------------------------------|-----|
-| API framework      | Go + Echo v4                      | Already in boilerplate, familiar |
-| Language           | Go 1.25+                          | Strict types, single binary |
-| DB driver          | pgx/v5 + pgxpool                  | Already in boilerplate, excellent Postgres support |
-| Migrations         | tern (embedded SQL files)         | Already in boilerplate |
-| Config             | koanf from env (`TENANTFLOW_` prefix) | Already in boilerplate |
-| Logging            | zerolog (JSON in prod)            | Already in boilerplate |
-| Validation         | go-playground/validator           | Already in boilerplate |
-| Errors             | custom `errs.HTTPError` + `sqlerr` | Already in boilerplate — converts pg errors to friendly HTTP errors |
-| Identity / Auth    | **Keycloak 26.x** (OIDC/OAuth2)   | **New** — realm, clients, roles, token verification |
-| OIDC verification  | **coreos/go-oidc v3**             | **New** — discovery + JWKS + verifier |
-| Keycloak admin API | **Nerzal/gocloak v14**            | **New** — automate identity creation in the saga |
-| JWT parsing        | **go-jose/go-jose v3**            | **New** (already an indirect dep of the template) |
-| Workflow engine    | Temporal Go SDK                   | **New** — core of the project |
-| Container runtime  | Docker SDK / docker CLI           | **New** — the "cloud provider" |
-| Frontend           | Next.js + React + TypeScript      | **New** — fullstack dashboard |
-| Frontend auth      | Auth.js (NextAuth) Keycloak provider | **New** — Authorization Code + PKCE |
-| Realtime UI        | SSE (Server-Sent Events)          | **New** — live workflow progress |
-| Local infra        | docker-compose (postgres, redis, temporal, keycloak, worker) | **New** |
-| Observability      | Prometheus + Grafana (later phase) | Extends day-job skills |
+| Component          | Tech                                                         | Why                                                                 |
+| ------------------ | ------------------------------------------------------------ | ------------------------------------------------------------------- |
+| API framework      | Go + Echo v4                                                 | Already in boilerplate, familiar                                    |
+| Language           | Go 1.25+                                                     | Strict types, single binary                                         |
+| DB driver          | pgx/v5 + pgxpool                                             | Already in boilerplate, excellent Postgres support                  |
+| Migrations         | tern (embedded SQL files)                                    | Already in boilerplate                                              |
+| Config             | koanf from env (`TENANTFLOW_` prefix)                        | Already in boilerplate                                              |
+| Logging            | zerolog (JSON in prod)                                       | Already in boilerplate                                              |
+| Validation         | go-playground/validator                                      | Already in boilerplate                                              |
+| Errors             | custom `errs.HTTPError` + `sqlerr`                           | Already in boilerplate — converts pg errors to friendly HTTP errors |
+| Identity / Auth    | **Keycloak 26.x** (OIDC/OAuth2)                              | **New** — realm, clients, roles, token verification                 |
+| OIDC verification  | **coreos/go-oidc v3**                                        | **New** — discovery + JWKS + verifier                               |
+| Keycloak admin API | **Nerzal/gocloak v14**                                       | **New** — automate identity creation in the saga                    |
+| JWT parsing        | **go-jose/go-jose v3**                                       | **New** (already an indirect dep of the template)                   |
+| Workflow engine    | Temporal Go SDK                                              | **New** — core of the project                                       |
+| Container runtime  | Docker SDK / docker CLI                                      | **New** — the "cloud provider"                                      |
+| Frontend           | Next.js + React + TypeScript                                 | **New** — fullstack dashboard                                       |
+| Frontend auth      | Auth.js (NextAuth) Keycloak provider                         | **New** — Authorization Code + PKCE                                 |
+| Realtime UI        | SSE (Server-Sent Events)                                     | **New** — live workflow progress                                    |
+| Local infra        | docker-compose (postgres, redis, temporal, keycloak, worker) | **New**                                                             |
+| Observability      | Prometheus + Grafana (later phase)                           | Extends day-job skills                                              |
 
 ---
 
@@ -239,27 +239,27 @@ internal/server                ← owns Config, Logger, DB pool, http.Server lif
 
 ### Supporting packages (read once, then trust them)
 
-| Package            | What it does | Why it matters for TenantFlow |
-|--------------------|--------------|-------------------------------|
-| `internal/config`  | Loads + validates env config with `TENANTFLOW_` prefix via koanf | We add Keycloak + Temporal + Docker settings here |
-| `internal/database` | pgxpool + ping + tern migrations (embedded FS, `schema_version` table) | We add migration files for `tenants`, `audit_events`, `workflow_instances` |
-| `internal/logger`  | zerolog, JSON in prod / console in dev | Activity logs will use this |
-| `internal/middleware` | CORS, rate limit, request ID, context logger, recover, global error handler | **Auth middleware gets swapped from Clerk → Keycloak here** |
-| `internal/errs`    | Typed `HTTPError` (code/message/status/fieldErrors) | Tenant 404s, validation errors, 401s use this |
-| `internal/sqlerr`  | Maps `pgconn.PgError` → friendly errors (unique violation → "already exists") | Free: duplicate tenant slug becomes a clean 400 |
-| `internal/validation` | `Validatable` interface + field errors | Tenant create payloads use this |
+| Package               | What it does                                                                  | Why it matters for TenantFlow                                              |
+| --------------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `internal/config`     | Loads + validates env config with `TENANTFLOW_` prefix via koanf              | We add Keycloak + Temporal + Docker settings here                          |
+| `internal/database`   | pgxpool + ping + tern migrations (embedded FS, `schema_version` table)        | We add migration files for `tenants`, `audit_events`, `workflow_instances` |
+| `internal/logger`     | zerolog, JSON in prod / console in dev                                        | Activity logs will use this                                                |
+| `internal/middleware` | CORS, rate limit, request ID, context logger, recover, global error handler   | **Auth middleware gets swapped from Clerk → Keycloak here**                |
+| `internal/errs`       | Typed `HTTPError` (code/message/status/fieldErrors)                           | Tenant 404s, validation errors, 401s use this                              |
+| `internal/sqlerr`     | Maps `pgconn.PgError` → friendly errors (unique violation → "already exists") | Free: duplicate tenant slug becomes a clean 400                            |
+| `internal/validation` | `Validatable` interface + field errors                                        | Tenant create payloads use this                                            |
 
 ### The Clerk → Keycloak swap (the crucial refactor)
 
 The boilerplate already has auth scaffolding — it just uses **Clerk**. Two files matter:
 
-| File | Current (Clerk) | New (Keycloak) |
-|------|-----------------|----------------|
-| `internal/middleware/auth.go` | `clerkhttp.WithHeaderAuthorization` validates Bearer token via Clerk SDK | Our own `OIDCMiddleware` using `go-oidc` verifier (discovery + cached JWKS) |
-| `internal/service/auth.go` | `clerk.SetKey(...)` | `authService` holding OIDC provider + gocloak admin client |
-| `internal/config` | `Auth.SecretKey` (Clerk secret) | `Auth.KeycloakURL`, `Auth.Realm`, `Auth.WebClientID`, `Auth.AdminClientID`, `Auth.AdminSecret` |
+| File                          | Current (Clerk)                                                          | New (Keycloak)                                                                                 |
+| ----------------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| `internal/middleware/auth.go` | `clerkhttp.WithHeaderAuthorization` validates Bearer token via Clerk SDK | Our own `OIDCMiddleware` using `go-oidc` verifier (discovery + cached JWKS)                    |
+| `internal/service/auth.go`    | `clerk.SetKey(...)`                                                      | `authService` holding OIDC provider + gocloak admin client                                     |
+| `internal/config`             | `Auth.SecretKey` (Clerk secret)                                          | `Auth.KeycloakURL`, `Auth.Realm`, `Auth.WebClientID`, `Auth.AdminClientID`, `Auth.AdminSecret` |
 
-**Why this swap is small (and what it teaches):** the rest of the app reads identity from *context*, not from Clerk directly. `internal/middleware/context.go` already extracts `user_id` and `user_role` from `c.Get(...)` — set by the auth middleware. So we only replace *who* sets those values (Clerk → Keycloak claims), and every handler, logger, and audit event keeps working. That's the payoff of the middleware abstraction — swap the identity provider without touching business logic.
+**Why this swap is small (and what it teaches):** the rest of the app reads identity from _context_, not from Clerk directly. `internal/middleware/context.go` already extracts `user_id` and `user_role` from `c.Get(...)` — set by the auth middleware. So we only replace _who_ sets those values (Clerk → Keycloak claims), and every handler, logger, and audit event keeps working. That's the payoff of the middleware abstraction — swap the identity provider without touching business logic.
 
 ### What stays / changes / is added
 
@@ -304,15 +304,15 @@ Keycloak server
     └── Admin REST API          ← {keycloak}/admin/realms/tenantflow/...
 ```
 
-**Analogy to lock in:** a **realm** is like a separate Keycloak "world" — in *our* project, our *tenant* concept maps nicely onto creating per-tenant **clients + roles** inside one realm. (In some products, each customer gets their own realm — that's the "database-per-tenant" equivalent of IAM. We'll do realm-per-platform + client-per-tenant, which matches how a control plane like ours is usually built.)
+**Analogy to lock in:** a **realm** is like a separate Keycloak "world" — in _our_ project, our _tenant_ concept maps nicely onto creating per-tenant **clients + roles** inside one realm. (In some products, each customer gets their own realm — that's the "database-per-tenant" equivalent of IAM. We'll do realm-per-platform + client-per-tenant, which matches how a control plane like ours is usually built.)
 
 ### Token types (the part everyone gets wrong until they learn it)
 
-| Token | Who sees it | What it is | Used for |
-|-------|-------------|------------|----------|
-| Access token | Browser + API | JWT signed by realm keys, ~5 min TTL | Sent as `Authorization: Bearer` to our API |
-| ID token | Browser only | JWT about the user | The app knows who the user is |
-| Refresh token | Browser (secure) | Opaque-ish, long TTL | Get new access tokens without re-login |
+| Token         | Who sees it      | What it is                           | Used for                                   |
+| ------------- | ---------------- | ------------------------------------ | ------------------------------------------ |
+| Access token  | Browser + API    | JWT signed by realm keys, ~5 min TTL | Sent as `Authorization: Bearer` to our API |
+| ID token      | Browser only     | JWT about the user                   | The app knows who the user is              |
+| Refresh token | Browser (secure) | Opaque-ish, long TTL                 | Get new access tokens without re-login     |
 
 Our API **only ever validates access tokens**. It does this **without calling Keycloak per request**: it caches the realm's public signing keys from the **JWKS** endpoint and verifies the JWT signature locally.
 
@@ -356,11 +356,11 @@ _ = idToken.Claims(&claims)                        // sub is in idToken.Subject
 
 ### RBAC design
 
-| Role | Permissions |
-|------|-------------|
-| `platform-admin` | Everything: create/upgrade/backup/restore/migrate/**delete** tenants |
-| `platform-operator` | Create + view tenants, view audit trails (no delete) |
-| *(per-tenant)* `tenant-owner` | View their own tenant status only (Phase 6+ stretch) |
+| Role                          | Permissions                                                          |
+| ----------------------------- | -------------------------------------------------------------------- |
+| `platform-admin`              | Everything: create/upgrade/backup/restore/migrate/**delete** tenants |
+| `platform-operator`           | Create + view tenants, view audit trails (no delete)                 |
+| _(per-tenant)_ `tenant-owner` | View their own tenant status only (Phase 6+ stretch)                 |
 
 Middleware: `auth.RequireRole("platform-admin")` — chainable on Echo routes. Destructive endpoints (`DELETE /tenants/{id}`) require admin.
 
@@ -459,9 +459,9 @@ Implementing **both modes** is the multitenancy depth — we can then defend eit
 
 ### Mental model: Workflows vs Activities
 
-- **Workflow** = orchestration logic. Plain Go code, must be deterministic (no direct DB/network calls, no time.Now(), no randomness). It decides *what to do and in what order*. Temporal replays it from history.
+- **Workflow** = orchestration logic. Plain Go code, must be deterministic (no direct DB/network calls, no time.Now(), no randomness). It decides _what to do and in what order_. Temporal replays it from history.
 - **Activity** = the actual work (create DB, run migration, call Docker, call Keycloak admin API). Can do anything, retried by Temporal on failure, must be **idempotent**.
-- Rule we follow: *orchestration in workflows, side effects in activities, progress in PostgreSQL.*
+- Rule we follow: _orchestration in workflows, side effects in activities, progress in PostgreSQL._
 
 ### Provision workflow (the primary Saga)
 
@@ -505,7 +505,7 @@ If any step returns an error (after retries are exhausted), `defer comp.Compensa
 
 ### Compensation design rules (interview-grade rules we'll implement)
 
-1. **Retries first, compensation second.** Transient failures → Temporal retries. Only *permanent* failures trigger compensation.
+1. **Retries first, compensation second.** Transient failures → Temporal retries. Only _permanent_ failures trigger compensation.
 2. **Every non-idempotent forward step gets a compensation.** If the forward step is idempotent (safe to run twice), retry is enough — no compensation needed.
 3. **Compensations must be idempotent too.** `dropDatabase` on a DB that no longer exists must not error out the saga.
 4. **Compensations should be best-effort but must be attempted.** A failed compensation is recorded in `audit_events` and surfaced — never silently swallowed.
@@ -551,19 +551,19 @@ Demonstrated in Phase 8 by adding a brand-new step (e.g. `createTlsCert`) while 
 
 All under `/api/v1`, **protected by Keycloak bearer tokens**. `DELETE` + `migrate` require `platform-admin`.
 
-| Method | Path | Auth | Action | Workflow |
-|---|---|---|---|---|
-| POST | `/tenants` | operator+ | Create tenant (async) | `provision` |
-| GET | `/tenants` | operator+ | List tenants (paginated) | — |
-| GET | `/tenants/{id}` | operator+ | Tenant detail + status | — |
-| POST | `/tenants/{id}/upgrade` | operator+ | Change plan | `upgrade` |
-| POST | `/tenants/{id}/backup` | operator+ | Snapshot + verify | `backup` |
-| POST | `/tenants/{id}/restore` | operator+ | Restore from backup | `restore` |
-| POST | `/tenants/{id}/migrate` | **admin** | Move to another host | `migrate` |
-| DELETE | `/tenants/{id}` | **admin** | Soft-delete → 30-day wait → purge | `delete` |
-| GET | `/tenants/{id}/events` | operator+ | Audit trail | — |
-| GET | `/workflows/{workflowId}/events` | operator+ | Live progress (SSE) | — |
-| GET | `/status` | public | Health (exists already) | — |
+| Method | Path                             | Auth      | Action                            | Workflow    |
+| ------ | -------------------------------- | --------- | --------------------------------- | ----------- |
+| POST   | `/tenants`                       | operator+ | Create tenant (async)             | `provision` |
+| GET    | `/tenants`                       | operator+ | List tenants (paginated)          | —           |
+| GET    | `/tenants/{id}`                  | operator+ | Tenant detail + status            | —           |
+| POST   | `/tenants/{id}/upgrade`          | operator+ | Change plan                       | `upgrade`   |
+| POST   | `/tenants/{id}/backup`           | operator+ | Snapshot + verify                 | `backup`    |
+| POST   | `/tenants/{id}/restore`          | operator+ | Restore from backup               | `restore`   |
+| POST   | `/tenants/{id}/migrate`          | **admin** | Move to another host              | `migrate`   |
+| DELETE | `/tenants/{id}`                  | **admin** | Soft-delete → 30-day wait → purge | `delete`    |
+| GET    | `/tenants/{id}/events`           | operator+ | Audit trail                       | —           |
+| GET    | `/workflows/{workflowId}/events` | operator+ | Live progress (SSE)               | —           |
+| GET    | `/status`                        | public    | Health (exists already)           | —           |
 
 **Every mutating endpoint returns immediately with the workflow ID** (202 Accepted). The UI tracks progress via SSE + polling — exactly how real control planes (Azure, AWS) behave.
 
@@ -588,6 +588,7 @@ Next.js app in `web/`:
 > Every phase is small enough to finish. **Phases 1–4 are the MVP.** Phase 5+ only after the MVP works end-to-end.
 
 ### Phase 0 — Foundation: template → runnable stack
+
 - [ ] Create project from `go-echo-boilerplate` (copy, rename module to `github.com/2SSK/tenantflow`, rename `cmd/boilerplate` → `cmd/api`)
 - [ ] Rename env prefix `BOILERPLATE_` → `TENANTFLOW_`
 - [ ] `go mod tidy`, `go-task run`, verify `/status` and `/docs` work
@@ -597,6 +598,7 @@ Next.js app in `web/`:
 - [ ] Read through every boilerplate layer once (config → database → middleware → handler → service → repository) and note questions
 
 ### Phase 1 — Identity & Access with Keycloak
+
 - [ ] Swap `internal/middleware/auth.go`: Clerk → OIDC middleware (go-oidc verifier, cached JWKS)
 - [ ] New `internal/auth`: provider init, claims extraction, `RequireRole` middleware
 - [ ] Update `internal/config`: Keycloak settings (URL, realm, client IDs, admin secret)
@@ -607,6 +609,7 @@ Next.js app in `web/`:
 - [ ] Write down the OIDC flow from memory (login → code → token → API verification) — this is the interview answer
 
 ### Phase 2 — Control plane data model
+
 - [ ] Migration `0002_tenants.sql`: `tenants` table
 - [ ] Migration `0003_audit_events.sql`: `audit_events` table (+ index)
 - [ ] Migration `0004_workflow_instances.sql`: `workflow_instances` table (+ index)
@@ -615,12 +618,14 @@ Next.js app in `web/`:
 - [ ] Unit/integration tests for repository layer against local Postgres
 
 ### Phase 3 — Cloud provider abstraction
+
 - [ ] `internal/cloud/provider.go`: `CloudProvider` interface (CreateDatabase, DropDatabase, RunMigration, CreateRedis, CreateApp, HealthCheck…)
 - [ ] `internal/cloud/docker.go`: DockerProvider using Docker SDK
 - [ ] Helper: generate tenant DB name safely (`tenant_<id>` — Postgres identifier rules)
 - [ ] Test manually: create/drop a tenant database via a small CLI or test script
 
 ### Phase 4 — Provision Saga (MVP core)
+
 - [ ] `internal/activity/provision.go`: all forward activities + compensation activities
 - [ ] `internal/activity/identity.go`: CreateTenantIdentity / DeleteTenantIdentity via gocloak
 - [ ] `internal/workflow/provision.go`: `TenantProvisionWorkflow` using `workflow.NewCompensator`
@@ -632,6 +637,7 @@ Next.js app in `web/`:
 - [ ] **Minimal chaos hook:** config flag that fails the Nth activity → verify saga
 
 ### Phase 5 — Fullstack dashboard
+
 - [ ] Scaffold Next.js app in `web/` (TypeScript, strict)
 - [ ] Auth.js + Keycloak provider login
 - [ ] Tenants list page (calls GET /tenants with Bearer token)
@@ -641,6 +647,7 @@ Next.js app in `web/`:
 - [ ] Role-aware UI (hide admin actions for non-admins)
 
 ### Phase 6 — Upgrade Saga + Shared isolation mode
+
 - [ ] Migration for shared-schema tenant data (e.g. `shared_users` with `tenant_id`)
 - [ ] Tenant creation supports `isolation_mode: shared`
 - [ ] `TenantUpgradeWorkflow`: verify → raise quotas → enable features → update billing; compensation = roll quotas back
@@ -648,6 +655,7 @@ Next.js app in `web/`:
 - [ ] Write the "dedicated vs shared" trade-off notes for interviews
 
 ### Phase 7 — Migrate / Backup / Restore / Delete
+
 - [ ] `TenantMigrateWorkflow` (the realistic ops flow): lock writes → snapshot → restore to new host → sync changes → switch traffic → unlock
 - [ ] `TenantBackupWorkflow`: freeze writes (PG) → snapshot → **restore to temp → run validation → drop temp DB → mark backup verified** (production-grade backup verification, not just "backup done")
 - [ ] `TenantRestoreWorkflow`: create new DB → restore → validate → switch traffic
@@ -655,6 +663,7 @@ Next.js app in `web/`:
 - [ ] Endpoints + UI actions
 
 ### Phase 8 — Resilience, chaos & DLQ
+
 - [ ] Configurable activity failure injection (rate + which activity) via env or API
 - [ ] **DLQ:** failed runs recorded in `workflow_instances` (status = failed + error) → "failed runs" view + retry endpoint that restarts the workflow → audit event records the manual replay
 - [ ] `audit_events` query view for the UI ("compensation history")
@@ -662,6 +671,7 @@ Next.js app in `web/`:
 - [ ] **Workflow versioning demo:** add a step via `workflow.GetVersion` while an old run is in-flight → verify both paths complete
 
 ### Phase 9 — Observability, cost, docs, ship
+
 - [ ] Prometheus metrics from API + worker (`temporal_*` SDK metrics + custom `tenantflow_*`)
 - [ ] Grafana dashboard: provision time, success %, compensation count, worker utilization
 - [ ] **Per-tenant cost view (stretch):** estimate from resource metadata (DB size, container CPU/mem, workflow count) — the "cost dashboard" real SaaS platforms have
@@ -677,112 +687,123 @@ Next.js app in `web/`:
 > Update this table as we go. Each row becomes "done" only when it actually works.
 
 ### Phase 0 — Foundation
-| # | Task | Status |
-|---|------|--------|
-| 0.1 | Project created from boilerplate (module renamed) | ☐ |
-| 0.2 | Env prefix renamed to `TENANTFLOW_` | ☐ |
-| 0.3 | App runs: `/status` healthy, `/docs` serves | ☐ |
-| 0.4 | docker-compose stack (postgres/redis/temporal/keycloak) up | ☐ |
-| 0.5 | Keycloak realm imported + admin console reachable | ☐ |
-| 0.6 | Go deps added (temporal, oidc, gocloak) | ☐ |
-| 0.7 | Boilerplate layers read + questions listed | ☐ |
+
+| #   | Task                                                       | Status |
+| --- | ---------------------------------------------------------- | ------ |
+| 0.1 | Project created from boilerplate (module renamed)          | ☐      |
+| 0.2 | Env prefix renamed to `TENANTFLOW_`                        | ☐      |
+| 0.3 | App runs: `/status` healthy, `/docs` serves                | ☐      |
+| 0.4 | docker-compose stack (postgres/redis/temporal/keycloak) up | ☐      |
+| 0.5 | Keycloak realm imported + admin console reachable          | ☐      |
+| 0.6 | Go deps added (temporal, oidc, gocloak)                    | ☐      |
+| 0.7 | Boilerplate layers read + questions listed                 | ☐      |
 
 ### Phase 1 — Identity & Access (Keycloak)
-| # | Task | Status |
-|---|------|--------|
-| 1.1 | Clerk → OIDC middleware swap | ☐ |
-| 1.2 | `internal/auth` provider + verifier + RequireRole | ☐ |
-| 1.3 | Keycloak config added | ☐ |
-| 1.4 | Clerk deps removed; gocloak admin client wired | ☐ |
-| 1.5 | Roles + test users seeded | ☐ |
-| 1.6 | API protected; `/status` public | ☐ |
-| 1.7 | curl tests: 200 / 401 / 403 pass | ☐ |
-| 1.8 | OIDC flow written down from memory | ☐ |
+
+| #   | Task                                              | Status |
+| --- | ------------------------------------------------- | ------ |
+| 1.1 | Clerk → OIDC middleware swap                      | ☐      |
+| 1.2 | `internal/auth` provider + verifier + RequireRole | ☐      |
+| 1.3 | Keycloak config added                             | ☐      |
+| 1.4 | Clerk deps removed; gocloak admin client wired    | ☐      |
+| 1.5 | Roles + test users seeded                         | ☐      |
+| 1.6 | API protected; `/status` public                   | ☐      |
+| 1.7 | curl tests: 200 / 401 / 403 pass                  | ☐      |
+| 1.8 | OIDC flow written down from memory                | ☐      |
 
 ### Phase 2 — Data model
-| # | Task | Status |
-|---|------|--------|
-| 2.1 | `tenants` migration | ☐ |
-| 2.2 | `audit_events` migration | ☐ |
-| 2.3 | `workflow_instances` migration | ☐ |
-| 2.4 | Go models | ☐ |
-| 2.5 | Repositories | ☐ |
-| 2.6 | Repo tests | ☐ |
+
+| #   | Task                           | Status |
+| --- | ------------------------------ | ------ |
+| 2.1 | `tenants` migration            | ☐      |
+| 2.2 | `audit_events` migration       | ☐      |
+| 2.3 | `workflow_instances` migration | ☐      |
+| 2.4 | Go models                      | ☐      |
+| 2.5 | Repositories                   | ☐      |
+| 2.6 | Repo tests                     | ☐      |
 
 ### Phase 3 — Cloud provider
-| # | Task | Status |
-|---|------|--------|
-| 3.1 | `CloudProvider` interface | ☐ |
-| 3.2 | `DockerProvider` implementation | ☐ |
-| 3.3 | Manual create/drop verification | ☐ |
+
+| #   | Task                            | Status |
+| --- | ------------------------------- | ------ |
+| 3.1 | `CloudProvider` interface       | ☐      |
+| 3.2 | `DockerProvider` implementation | ☐      |
+| 3.3 | Manual create/drop verification | ☐      |
 
 ### Phase 4 — Provision Saga
-| # | Task | Status |
-|---|------|--------|
-| 4.1 | Provision activities + compensations | ☐ |
-| 4.2 | Identity activities (gocloak) | ☐ |
-| 4.3 | `TenantProvisionWorkflow` | ☐ |
-| 4.4 | Temporal client + worker | ☐ |
-| 4.5 | Tenant API (POST/GET) | ☐ |
-| 4.6 | Audit events from activities | ☐ |
-| 4.7 | Failure demo: compensation verified | ☐ |
-| 4.8 | Minimal chaos hook | ☐ |
+
+| #   | Task                                 | Status |
+| --- | ------------------------------------ | ------ |
+| 4.1 | Provision activities + compensations | ☐      |
+| 4.2 | Identity activities (gocloak)        | ☐      |
+| 4.3 | `TenantProvisionWorkflow`            | ☐      |
+| 4.4 | Temporal client + worker             | ☐      |
+| 4.5 | Tenant API (POST/GET)                | ☐      |
+| 4.6 | Audit events from activities         | ☐      |
+| 4.7 | Failure demo: compensation verified  | ☐      |
+| 4.8 | Minimal chaos hook                   | ☐      |
 
 ### Phase 5 — Dashboard
-| # | Task | Status |
-|---|------|--------|
-| 5.1 | Next.js scaffold | ☐ |
-| 5.2 | Keycloak login (Auth.js) | ☐ |
-| 5.3 | Tenants list | ☐ |
-| 5.4 | Create tenant form | ☐ |
-| 5.5 | Live progress (SSE) | ☐ |
-| 5.6 | Audit timeline | ☐ |
-| 5.7 | Role-aware UI | ☐ |
+
+| #   | Task                     | Status |
+| --- | ------------------------ | ------ |
+| 5.1 | Next.js scaffold         | ☐      |
+| 5.2 | Keycloak login (Auth.js) | ☐      |
+| 5.3 | Tenants list             | ☐      |
+| 5.4 | Create tenant form       | ☐      |
+| 5.5 | Live progress (SSE)      | ☐      |
+| 5.6 | Audit timeline           | ☐      |
+| 5.7 | Role-aware UI            | ☐      |
 
 ### Phase 6 — Upgrade + shared mode
-| # | Task | Status |
-|---|------|--------|
-| 6.1 | Shared-schema migration | ☐ |
-| 6.2 | Shared isolation tenant creation | ☐ |
-| 6.3 | Upgrade workflow + compensation | ☐ |
-| 6.4 | Upgrade endpoint + UI | ☐ |
-| 6.5 | Trade-off notes written | ☐ |
+
+| #   | Task                             | Status |
+| --- | -------------------------------- | ------ |
+| 6.1 | Shared-schema migration          | ☐      |
+| 6.2 | Shared isolation tenant creation | ☐      |
+| 6.3 | Upgrade workflow + compensation  | ☐      |
+| 6.4 | Upgrade endpoint + UI            | ☐      |
+| 6.5 | Trade-off notes written          | ☐      |
 
 ### Phase 7 — Migrate/Backup/Restore/Delete
-| # | Task | Status |
-|---|------|--------|
-| 7.1 | Migrate workflow (lock→snapshot→sync→switch→unlock) | ☐ |
-| 7.2 | Backup workflow with verification (restore→validate→drop temp) | ☐ |
-| 7.3 | Restore workflow | ☐ |
-| 7.4 | Delete workflow (with 30-day timer) | ☐ |
-| 7.5 | Endpoints + UI | ☐ |
+
+| #   | Task                                                           | Status |
+| --- | -------------------------------------------------------------- | ------ |
+| 7.1 | Migrate workflow (lock→snapshot→sync→switch→unlock)            | ☐      |
+| 7.2 | Backup workflow with verification (restore→validate→drop temp) | ☐      |
+| 7.3 | Restore workflow                                               | ☐      |
+| 7.4 | Delete workflow (with 30-day timer)                            | ☐      |
+| 7.5 | Endpoints + UI                                                 | ☐      |
 
 ### Phase 8 — Chaos & DLQ
-| # | Task | Status |
-|---|------|--------|
-| 8.1 | Failure injection config | ☐ |
-| 8.2 | DLQ: failed-runs view + retry endpoint | ☐ |
-| 8.3 | Compensation history view | ☐ |
-| 8.4 | Fail-every-activity test matrix | ☐ |
-| 8.5 | Workflow versioning demo | ☐ |
+
+| #   | Task                                   | Status |
+| --- | -------------------------------------- | ------ |
+| 8.1 | Failure injection config               | ☐      |
+| 8.2 | DLQ: failed-runs view + retry endpoint | ☐      |
+| 8.3 | Compensation history view              | ☐      |
+| 8.4 | Fail-every-activity test matrix        | ☐      |
+| 8.5 | Workflow versioning demo               | ☐      |
 
 ### Phase 9 — Ship
-| # | Task | Status |
-|---|------|--------|
-| 9.1 | Metrics + Grafana | ☐ |
-| 9.2 | Per-tenant cost view (stretch) | ☐ |
-| 9.3 | README + screenshots | ☐ |
-| 9.4 | Demo video | ☐ |
-| 9.5 | Blog posts | ☐ |
-| 9.6 | Live deployment + portfolio link | ☐ |
+
+| #   | Task                             | Status |
+| --- | -------------------------------- | ------ |
+| 9.1 | Metrics + Grafana                | ☐      |
+| 9.2 | Per-tenant cost view (stretch)   | ☐      |
+| 9.3 | README + screenshots             | ☐      |
+| 9.4 | Demo video                       | ☐      |
+| 9.5 | Blog posts                       | ☐      |
+| 9.6 | Live deployment + portfolio link | ☐      |
 
 ---
 
 ## 13. Learning Goals Checklist
 
-> Every item here is an interview-answer you should be able to give from *this* project, not from a tutorial.
+> Every item here is an interview-answer you should be able to give from _this_ project, not from a tutorial.
 
 ### Keycloak / OIDC / OAuth2
+
 - [ ] Realm vs client vs user vs role — explain each in one sentence with an analogy
 - [ ] Public vs confidential clients; when to use PKCE (Authorization Code + PKCE for SPAs)
 - [ ] Access token vs ID token vs refresh token — who sees each, what they're for
@@ -797,14 +818,16 @@ Next.js app in `web/`:
 - [ ] Token refresh flow in the dashboard; 401 handling in the frontend
 
 ### Multitenancy
+
 - [ ] What database-per-tenant buys you (isolation, noise, restore isolation) and costs you (connection bloat, migrations ×N, management)
 - [ ] What shared-schema buys you (cheap, easy analytics) and costs you (noisy neighbor, RLS needs)
 - [ ] How `tenant_id` scoping must be enforced at the repository layer (one missed `WHERE tenant_id = ?` = cross-tenant leak)
 - [ ] When to use Postgres Row-Level Security (RLS) instead of app-level filtering
-- [ ] How a control plane *itself* is a multi-tenant system (our API + workflow instances)
+- [ ] How a control plane _itself_ is a multi-tenant system (our API + workflow instances)
 - [ ] Realm-per-customer vs client-per-customer IAM — when you'd pick each
 
 ### Temporal
+
 - [ ] Workflows are deterministic; Activities are where side effects live
 - [ ] Temporal replay / event history — why a workflow survives restarts
 - [ ] Retries vs compensation: when each applies
@@ -814,6 +837,7 @@ Next.js app in `web/`:
 - [ ] Why `time.Now()`, `rand`, and direct I/O are forbidden in workflow code
 
 ### SAGA / distributed transactions
+
 - [ ] Saga = local transactions + compensation, not a 2PC distributed transaction
 - [ ] Orchestration (central coordinator) vs choreography (event-driven) sagas — and why Temporal = orchestration
 - [ ] Idempotency keys: making retries and compensations safe
@@ -822,15 +846,17 @@ Next.js app in `web/`:
 - [ ] The failure ladder: retries → compensation → DLQ (failed state + manual replay)
 
 ### PostgreSQL
+
 - [ ] Writing versioned migrations with tern; why `schema_version` table exists
 - [ ] UUID keys, timestamptz, JSONB payloads for audit
-- [ ] Unique constraints as a *feature* (slug uniqueness → friendly 400 via sqlerr)
+- [ ] Unique constraints as a _feature_ (slug uniqueness → friendly 400 via sqlerr)
 - [ ] Creating/dropping databases at runtime (for tenant provisioning) — connection pooling gotchas
 - [ ] Indexing the audit trail (tenant_id, created_at DESC) for the timeline UI
 - [ ] Backup verification: restore to a temp DB → validate → drop temp → mark verified
 - [ ] Live migration flow: lock → snapshot → sync → switch traffic → unlock (and its failure modes)
 
 ### Platform engineering / fullstack
+
 - [ ] Provider abstraction: why the `CloudProvider` interface is the platform boundary
 - [ ] Async API design: 202 Accepted + workflowId + status polling/SSE
 - [ ] Observability of a control plane: provision time, success rate, compensation count
@@ -875,7 +901,7 @@ Questions this project lets you answer with authority:
 
 ## 16. Open Decisions
 
-Decisions to make *when we reach them* (not now):
+Decisions to make _when we reach them_ (not now):
 
 - [ ] **Keycloak auth mode (DECIDED):** OIDC bearer-token validation in the Go API; Auth.js (Keycloak provider) in the dashboard
 - [ ] **Token validation library:** go-oidc verifier (recommended) vs raw go-jose (we may peek at go-jose internals for learning)
@@ -892,4 +918,4 @@ Decisions to make *when we reach them* (not now):
 
 ---
 
-*This file is the living source of truth. Update the progress tracker (Section 12) at the end of every session.*
+_This file is the living source of truth. Update the progress tracker (Section 12) at the end of every session._

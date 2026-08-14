@@ -1,12 +1,12 @@
 package workflow
 
 import (
-	"context"
 	"time"
 
-	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
+
+	"github.com/2SSK/tenantflow/internal/activities"
 )
 
 const TaskQueue = "tenantflow-provision"
@@ -15,7 +15,7 @@ type ProvisionInput struct {
 	TenantID string
 }
 
-func ProvisionTenantWorkflow(ctx workflow.Context, in ProvisionInput) (string, error) {
+func ProvisionTenantWorkflow(ctx workflow.Context, in ProvisionInput) error {
 	logger := workflow.GetLogger(ctx)
 	logger.Info("provision workflow started", "tenantID", in.TenantID)
 
@@ -26,18 +26,23 @@ func ProvisionTenantWorkflow(ctx workflow.Context, in ProvisionInput) (string, e
 		},
 	})
 
-	var result string
-	if err := workflow.ExecuteActivity(actCtx, ProvisionActivity, in.TenantID).Get(actCtx, &result); err != nil {
-		return "", err
+	// persist the tenant row as "provisioning" so the API
+	// can report progress immediately.
+	if err := workflow.ExecuteActivity(actCtx, activities.CreateTenantRecordActivityName, in.TenantID).Get(actCtx, nil); err != nil {
+		return err
+	}
+
+	// do the real provisioning work
+	if err := workflow.ExecuteActivity(actCtx, activities.ProvisionTenantActivityName, in.TenantID).Get(actCtx, nil); err != nil {
+		return err
+	}
+
+	// flip the tenant to "active"
+	if err := workflow.ExecuteActivity(actCtx, activities.MarkTenantActiveActivityName, in.TenantID).Get(actCtx, nil); err != nil {
+		return err
 	}
 
 	logger.Info("provision workflow completed", "tenantID", in.TenantID)
 
-	return result, nil
-}
-
-func ProvisionActivity(ctx context.Context, tenantID string) (string, error) {
-	activity.GetLogger(ctx).Info("provisioning tenant", "tenantID", tenantID)
-
-	return "provisioned: " + tenantID, nil
+	return nil
 }

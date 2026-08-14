@@ -9,7 +9,7 @@ import (
 
 type TenantRepository interface {
 	CreateTenant(ctx context.Context, t *model.Tenant) error
-	GetTenant(ctx context.Context, tenantID string) error
+	GetTenant(ctx context.Context, tenantID string) (*model.Tenant, error)
 	UpdateTenantStatus(ctx context.Context, tenantID string, status model.TenantStatus) error
 }
 
