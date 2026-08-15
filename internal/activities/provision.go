@@ -24,12 +24,13 @@ func NewProvisionActivities(repo repository.TenantRepository) *ProvisionActiviti
 	return &ProvisionActivities{repo: repo}
 }
 
-func (a *ProvisionActivities) CreateTenantRecord(ctx context.Context, tenantID string) error {
+func (a *ProvisionActivities) CreateTenantRecord(ctx context.Context, tenantID string, workflowID string) error {
 	activity.GetLogger(ctx).Info("Creating tenant record", "tenantID", tenantID)
 
 	tenant := &model.Tenant{
-		TenantID: tenantID,
-		Status:   model.TenantStatusProvisioning,
+		TenantID:   tenantID,
+		Status:     model.TenantStatusProvisioning,
+		WorkflowID: &workflowID,
 	}
 
 	return a.repo.CreateTenant(ctx, tenant)

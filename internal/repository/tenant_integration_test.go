@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/2SSK/tenantflow/internal/model"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -107,8 +106,8 @@ func TestGetTenantNotFound(t *testing.T) {
 	repo := NewPostgresTenantRepository(pool)
 
 	_, err := repo.GetTenant(context.Background(), "definitely-not-a-tenant")
-	if !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("err = %v, want pgx.ErrNoRows", err)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }
 

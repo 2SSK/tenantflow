@@ -16,6 +16,7 @@ import (
 	"github.com/2SSK/tenantflow/internal/database"
 	"github.com/2SSK/tenantflow/internal/logger"
 	"github.com/2SSK/tenantflow/internal/middleware"
+	"github.com/2SSK/tenantflow/internal/repository"
 	"github.com/2SSK/tenantflow/internal/router"
 	"github.com/2SSK/tenantflow/internal/temporal"
 )
@@ -56,9 +57,11 @@ func run() error {
 	}
 	defer db.Close()
 
+	repo := repository.NewPostgresTenantRepository(db.Pool)
+
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),
-		Handler:           middleware.RequestLogger(log, router.New(tc, log)),
+		Handler:           middleware.RequestLogger(log, router.New(tc, repo, log)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

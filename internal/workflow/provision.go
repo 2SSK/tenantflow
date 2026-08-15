@@ -19,6 +19,9 @@ func ProvisionTenantWorkflow(ctx workflow.Context, in ProvisionInput) error {
 	logger := workflow.GetLogger(ctx)
 	logger.Info("provision workflow started", "tenantID", in.TenantID)
 
+	info := workflow.GetInfo(ctx)
+	workflowID := info.WorkflowExecution.ID
+
 	actCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: time.Minute,
 		RetryPolicy: &temporal.RetryPolicy{
@@ -28,7 +31,7 @@ func ProvisionTenantWorkflow(ctx workflow.Context, in ProvisionInput) error {
 
 	// persist the tenant row as "provisioning" so the API
 	// can report progress immediately.
-	if err := workflow.ExecuteActivity(actCtx, activities.CreateTenantRecordActivityName, in.TenantID).Get(actCtx, nil); err != nil {
+	if err := workflow.ExecuteActivity(actCtx, activities.CreateTenantRecordActivityName, in.TenantID, workflowID).Get(actCtx, nil); err != nil {
 		return err
 	}
 

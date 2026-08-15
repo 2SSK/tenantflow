@@ -4,15 +4,20 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
 
+	"github.com/2SSK/tenantflow/internal/model"
+	"github.com/2SSK/tenantflow/internal/repository"
 	tfworkflow "github.com/2SSK/tenantflow/internal/workflow"
 )
 
@@ -20,6 +25,11 @@ type stubWorkflowStarter struct {
 	startedOptions client.StartWorkflowOptions
 	startedArgs    []any
 	err            error
+}
+
+type stubTenantStore struct {
+	tenant *model.Tenant
+	err    error
 }
 
 func (s *stubWorkflowStarter) ExecuteWorkflow(ctx context.Context, options client.StartWorkflowOptions, workflow any, args ...any) (client.WorkflowRun, error) {
@@ -41,13 +51,17 @@ func (f *fakeRun) GetWithOptions(ctx context.Context, valuePtr any, options clie
 	return nil
 }
 
-func newTestTenantHandler(s *stubWorkflowStarter) *TenantHandler {
-	return NewTenantHandler(s, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+func (s *stubTenantStore) GetTenant(ctx context.Context, tenantID string) (*model.Tenant, error) {
+	return s.tenant, s.err
+}
+
+func newTestTenantHandler(s *stubWorkflowStarter, store TenantStore) *TenantHandler {
+	return NewTenantHandler(s, store, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
 }
 
 func TestCreateTenatAccept(t *testing.T) {
 	stub := &stubWorkflowStarter{}
-	h := newTestTenantHandler(stub)
+	h := newTestTenantHandler(stub, &stubTenantStore{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/tenants", bytes.NewBufferString(`{"tenantID":"acme"}`))
 	rec := httptest.NewRecorder()
@@ -86,7 +100,8 @@ func TestCreateTenatAccept(t *testing.T) {
 }
 
 func TestCreateTenantBadJSON(t *testing.T) {
-	h := newTestTenantHandler(&stubWorkflowStarter{})
+	stub := &stubWorkflowStarter{}
+	h := newTestTenantHandler(stub, &stubTenantStore{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/tenants", bytes.NewBufferString(`{not json`))
 	rec := httptest.NewRecorder()
@@ -100,7 +115,7 @@ func TestCreateTenantBadJSON(t *testing.T) {
 
 func TestCreateTenatMissingTenantID(t *testing.T) {
 	stub := &stubWorkflowStarter{}
-	h := newTestTenantHandler(&stubWorkflowStarter{})
+	h := newTestTenantHandler(stub, &stubTenantStore{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/tenants", bytes.NewBufferString(`{"tenantID":""}`))
 	rec := httptest.NewRecorder()
@@ -120,7 +135,7 @@ func TestCreateTenatConflict(t *testing.T) {
 		err: serviceerror.NewWorkflowExecutionAlreadyStarted("already started", "provision-acme", "run-1"),
 	}
 
-	h := newTestTenantHandler(stub)
+	h := newTestTenantHandler(stub, &stubTenantStore{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/tenants", bytes.NewBufferString(`{"tenantID":"acme"}`))
 	rec := httptest.NewRecorder()
@@ -129,5 +144,69 @@ func TestCreateTenatConflict(t *testing.T) {
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("expected 409, got %d", rec.Code)
+	}
+}
+
+func TestGetTenant(t *testing.T) {
+	now := time.Now()
+	workflowID := "provision-acme"
+	existing := &model.Tenant{
+		TenantID:   "acme",
+		Status:     model.TenantStatusActive,
+		WorkflowID: &workflowID,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+
+	tests := []struct {
+		name       string
+		store      *stubTenantStore
+		wantStatus int
+		wantBody   string
+	}{
+		{
+			name:       "found",
+			store:      &stubTenantStore{tenant: existing},
+			wantStatus: http.StatusOK,
+			wantBody:   `"tenantID":"acme"`,
+		},
+		{
+			name:       "workflow id is included",
+			store:      &stubTenantStore{tenant: existing},
+			wantStatus: http.StatusOK,
+			wantBody:   `"workflowID":"provision-acme"`,
+		},
+		{
+			name:       "not found",
+			store:      &stubTenantStore{err: repository.ErrNotFound},
+			wantStatus: http.StatusNotFound,
+			wantBody:   `"error":"tenant not found"`,
+		},
+		{
+			name:       "store error",
+			store:      &stubTenantStore{err: errors.New("connection refused")},
+			wantStatus: http.StatusInternalServerError,
+			wantBody:   `"error":"failed to get tenant"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newTestTenantHandler(&stubWorkflowStarter{}, tt.store)
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants/acme", nil)
+			req.SetPathValue("tenantID", "acme")
+			rec := httptest.NewRecorder()
+
+			h.GetTenant(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+
+			if tt.wantBody != "" && !strings.Contains(rec.Body.String(), tt.wantBody) {
+				t.Errorf("body = %q, want to contain %q", rec.Body.String(), tt.wantBody)
+			}
+		})
 	}
 }

@@ -7,13 +7,14 @@ import (
 	"github.com/2SSK/tenantflow/internal/handler"
 )
 
-func New(tc handler.WorkflowStarter, log *slog.Logger) *http.ServeMux {
+func New(tc handler.WorkflowStarter, store handler.TenantStore, log *slog.Logger) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /status", handler.Status)
 
-	tenants := handler.NewTenantHandler(tc, log)
+	tenants := handler.NewTenantHandler(tc, store, log)
 	mux.HandleFunc("POST /api/v1/tenants", tenants.CreateTenant)
+	mux.HandleFunc("GET /api/v1/tenants/{tenantID}", tenants.GetTenant)
 
 	return mux
 }

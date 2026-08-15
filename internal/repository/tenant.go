@@ -2,10 +2,14 @@ package repository
 
 import (
 	"context"
+	"errors"
 
 	"github.com/2SSK/tenantflow/internal/model"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+var ErrNotFound = errors.New("tenant not found")
 
 type TenantRepository interface {
 	CreateTenant(ctx context.Context, t *model.Tenant) error
@@ -39,6 +43,9 @@ func (r *PostgresTenantRepository) GetTenant(ctx context.Context, tenantID strin
 	WHERE tenant_id = $1`,
 		tenantID).Scan(&t.TenantID, &t.Status, &t.WorkflowID, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
 		return nil, err
 	}
 	return t, nil
