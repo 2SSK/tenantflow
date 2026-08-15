@@ -58,9 +58,11 @@ func run() error {
 	// Dependency chain: pool -> repository -> activities
 	repo := repository.NewPostgresTenantRepository(db.Pool)
 	acts := activities.NewProvisionActivities(repo)
+	depAct := activities.NewDeprovisionActivities(repo)
 
 	w := worker.New(tc.Client, tfworkflow.TaskQueue, worker.Options{})
 	w.RegisterWorkflow(tfworkflow.ProvisionTenantWorkflow)
+	w.RegisterWorkflow(tfworkflow.DeprovisionTenantWorkflow)
 
 	w.RegisterActivityWithOptions(acts.CreateTenantRecord, activity.RegisterOptions{
 		Name: activities.CreateTenantRecordActivityName,
@@ -70,6 +72,15 @@ func run() error {
 	})
 	w.RegisterActivityWithOptions(acts.MarkTenantActive, activity.RegisterOptions{
 		Name: activities.MarkTenantActiveActivityName,
+	})
+	w.RegisterActivityWithOptions(depAct.MarkTenantDeleting, activity.RegisterOptions{
+		Name: activities.MarkTenantDeletingActivityName,
+	})
+	w.RegisterActivityWithOptions(depAct.DeprovisionTenant, activity.RegisterOptions{
+		Name: activities.DeprovisionTenantActivityName,
+	})
+	w.RegisterActivityWithOptions(depAct.MarkTenantDeleted, activity.RegisterOptions{
+		Name: activities.MarkTenantDeletedActivityName,
 	})
 
 	log.Info("worker polling", "taskQueue", tfworkflow.TaskQueue)

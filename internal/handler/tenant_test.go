@@ -210,3 +210,60 @@ func TestGetTenant(t *testing.T) {
 		})
 	}
 }
+
+func TestDeleteTenant(t *testing.T) {
+	workflowID := "provision-acme"
+	existing := &model.Tenant{
+		TenantID:   "acme",
+		Status:     model.TenantStatusActive,
+		WorkflowID: &workflowID,
+	}
+
+	tests := []struct {
+		name       string
+		store      *stubTenantStore
+		starterErr error
+		wantStatus int
+		wantBody   string
+	}{
+		{
+			name:       "accepted",
+			store:      &stubTenantStore{tenant: existing},
+			wantStatus: http.StatusAccepted,
+			wantBody:   `"workflowID":"deprovision-acme","status":"deleting"`,
+		},
+		{
+			name:       "not found",
+			store:      &stubTenantStore{err: repository.ErrNotFound},
+			wantStatus: http.StatusNotFound,
+			wantBody:   `"error":"tenant not found"`,
+		},
+		{
+			name:       "already deleting",
+			store:      &stubTenantStore{tenant: existing},
+			starterErr: serviceerror.NewWorkflowExecutionAlreadyStarted("already started", "deprovision-acme", "run-1"),
+			wantStatus: http.StatusConflict,
+			wantBody:   `"error":"deletion already in progress for this tenant"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stub := &stubWorkflowStarter{err: tt.starterErr}
+			h := newTestTenantHandler(stub, tt.store)
+
+			req := httptest.NewRequest(http.MethodDelete, "/api/v1/tenants/acme", nil)
+			req.SetPathValue("tenantID", "acme")
+			rec := httptest.NewRecorder()
+
+			h.DeleteTenant(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if tt.wantBody != "" && !strings.Contains(rec.Body.String(), tt.wantBody) {
+				t.Errorf("body = %q, want to contain %q", rec.Body.String(), tt.wantBody)
+			}
+		})
+	}
+}

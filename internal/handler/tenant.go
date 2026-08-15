@@ -62,6 +62,13 @@ type TenantResponse struct {
 	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
+// DeleteTenantResponse is returned with HTTP 202 Accepted.
+type DeleteTenantResponse struct {
+	TenantID   string `json:"tenantID"`
+	WorkflowID string `json:"workflowID"`
+	Status     string `json:"status"`
+}
+
 func (h *TenantHandler) CreateTenant(w http.ResponseWriter, r *http.Request) {
 	var req CreateTenantRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -137,4 +144,47 @@ func toTenantResponse(t *model.Tenant) TenantResponse {
 	}
 
 	return resp
+}
+
+// DeleteTenant handles DELETE /api/v1/tenants/{tenantID}
+func (h *TenantHandler) DeleteTenant(w http.ResponseWriter, r *http.Request) {
+	tenantID := r.PathValue("tenantID")
+
+	if _, err := h.store.GetTenant(r.Context(), tenantID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "tenant not found")
+			return
+		}
+		h.log.Error("get tenant for delete", "tenantID", tenantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get tenant")
+		return
+	}
+
+	workflowID := "deprovision-" + tenantID
+
+	run, err := h.temporal.ExecuteWorkflow(r.Context(), client.StartWorkflowOptions{
+		ID:                                       workflowID,
+		TaskQueue:                                tfworkflow.TaskQueue,
+		WorkflowIDReusePolicy:                    enums.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
+		WorkflowExecutionErrorWhenAlreadyStarted: true,
+	}, tfworkflow.DeprovisionTenantWorkflow, tfworkflow.DeprovisionInput{
+		TenantID: tenantID,
+	})
+	if err != nil {
+		var already *serviceerror.WorkflowExecutionAlreadyStarted
+		if errors.As(err, &already) {
+			writeError(w, http.StatusConflict, "deletion already in progress for this tenant")
+			return
+		}
+		h.log.Error("start deprovision workflow", "tenantID", tenantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to start deprovisioning workflow")
+		return
+	}
+
+	h.log.Info("deprovision workflow started", "tenantID", tenantID, "workflowID", run.GetID())
+	writeJSON(w, http.StatusAccepted, DeleteTenantResponse{
+		TenantID:   tenantID,
+		WorkflowID: run.GetID(),
+		Status:     string(model.TenantStatusDeleting),
+	})
 }
