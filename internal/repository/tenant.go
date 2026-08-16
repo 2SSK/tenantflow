@@ -14,6 +14,7 @@ var ErrNotFound = errors.New("tenant not found")
 type TenantRepository interface {
 	CreateTenant(ctx context.Context, t *model.Tenant) error
 	GetTenant(ctx context.Context, tenantID string) (*model.Tenant, error)
+	ListTenants(ctx context.Context) ([]model.Tenant, error)
 	UpdateTenantStatus(ctx context.Context, tenantID string, status model.TenantStatus) error
 }
 
@@ -58,4 +59,28 @@ func (r *PostgresTenantRepository) UpdateTenantStatus(ctx context.Context, tenan
 	WHERE tenant_id = $1`,
 		tenantID, status)
 	return err
+}
+
+func (r *PostgresTenantRepository) ListTenants(ctx context.Context) ([]model.Tenant, error) {
+	rows, err := r.pool.Query(ctx, `
+	SELECT tenant_id, status, workflow_id, created_at, updated_at
+	FROM tenants
+	ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	tenants := make([]model.Tenant, 0)
+	for rows.Next() {
+		var t model.Tenant
+		if err := rows.Scan(&t.TenantID, &t.Status, &t.WorkflowID, &t.CreatedAt, &t.UpdatedAt); err != nil {
+			return nil, err
+		}
+		tenants = append(tenants, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return tenants, nil
 }

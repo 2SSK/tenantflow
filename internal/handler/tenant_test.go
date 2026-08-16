@@ -28,8 +28,9 @@ type stubWorkflowStarter struct {
 }
 
 type stubTenantStore struct {
-	tenant *model.Tenant
-	err    error
+	tenant  *model.Tenant
+	tenants []model.Tenant
+	err     error
 }
 
 func (s *stubWorkflowStarter) ExecuteWorkflow(ctx context.Context, options client.StartWorkflowOptions, workflow any, args ...any) (client.WorkflowRun, error) {
@@ -53,6 +54,10 @@ func (f *fakeRun) GetWithOptions(ctx context.Context, valuePtr any, options clie
 
 func (s *stubTenantStore) GetTenant(ctx context.Context, tenantID string) (*model.Tenant, error) {
 	return s.tenant, s.err
+}
+
+func (s *stubTenantStore) ListTenants(ctx context.Context) ([]model.Tenant, error) {
+	return s.tenants, s.err
 }
 
 func newTestTenantHandler(s *stubWorkflowStarter, store TenantStore) *TenantHandler {
@@ -205,6 +210,58 @@ func TestGetTenant(t *testing.T) {
 			}
 
 			if tt.wantBody != "" && !strings.Contains(rec.Body.String(), tt.wantBody) {
+				t.Errorf("body = %q, want to contain %q", rec.Body.String(), tt.wantBody)
+			}
+		})
+	}
+}
+
+func TestListTenants(t *testing.T) {
+	tests := []struct {
+		name       string
+		store      *stubTenantStore
+		wantStatus int
+		wantBody   string
+	}{
+		{
+			name: "returns all tenants",
+			store: &stubTenantStore{
+				tenants: []model.Tenant{
+					{TenantID: "acme", Status: model.TenantStatusActive},
+					{TenantID: "globex", Status: model.TenantStatusDeleted},
+				},
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `"tenantID":"acme","status":"active"`,
+		},
+		{
+			name:       "empty store returns empty list not null",
+			store:      &stubTenantStore{},
+			wantStatus: http.StatusOK,
+			wantBody:   `"tenants":[]`,
+		},
+		{
+			name:       "store error",
+			store:      &stubTenantStore{err: errors.New("connection refused")},
+			wantStatus: http.StatusInternalServerError,
+			wantBody:   `"error":"failed to list tenants"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stub := &stubWorkflowStarter{}
+			h := newTestTenantHandler(stub, tt.store)
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants", nil)
+			rec := httptest.NewRecorder()
+
+			h.ListTenants(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if !strings.Contains(rec.Body.String(), tt.wantBody) {
 				t.Errorf("body = %q, want to contain %q", rec.Body.String(), tt.wantBody)
 			}
 		})

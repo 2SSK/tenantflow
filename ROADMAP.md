@@ -109,20 +109,20 @@ Key rule we will implement: **every non-idempotent forward step gets a matching 
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  BROWSER (Next.js dashboard)                                 │
-│  tenant list · provision progress (live via SSE) · audit log │
-│  login handled by Keycloak (Authorization Code + PKCE)       │
+│  BROWSER (Next.js dashboard)                                │
+│  tenant list · provision progress (live via SSE) · audit log│
+│  login handled by Keycloak (Authorization Code + PKCE)      │
 └───────────────┬──────────────────────────┬──────────────────┘
                 │ redirects / login        │ REST + SSE
                 ▼                          │ Authorization: Bearer <access token>
 ┌───────────────────────────────┐  ┌───────▼──────────────────────────────┐
-│  KEYCLOAK (realm: tenantflow) │  │  API (Go + Echo)                      │
-│  ├─ users / groups            │  │  AuthMiddleware (OIDC verifier)       │
-│  ├─ clients:                  │  │  ├─ discovers OIDC config at startup  │
-│  │   tenantflow-web (public)  │  │  ├─ caches JWKS (signature keys)      │
-│  │   tenantflow-admin (svc acct)│ │  ├─ verifies sig / exp / iss / aud  │
-│  │   tenant-<id> (per tenant) │  │  ├─ extracts roles from claims        │
-│  ├─ roles: platform-admin,    │  │  └─ sets user_id + user_role context  │
+│  KEYCLOAK (realm: tenantflow) │  │  API (Go + Echo)                     │
+│  ├─ users / groups            │  │  AuthMiddleware (OIDC verifier)      │
+│  ├─ clients:                  │  │  ├─ discovers OIDC config at startup │
+│  │   tenantflow-web (public)  │  │  ├─ caches JWKS (signature keys)     │
+│  │   tenantflow-admin (svc acct)││  ├─ verifies sig / exp / iss / aud   │
+│  │   tenant-<id> (per tenant) │  │  ├─ extracts roles from claims       │
+│  ├─ roles: platform-admin,    │  │  └─ sets user_id + user_role context │
 │  │   platform-operator        │  └───────────────────┬──────────────────┘
 │  └─ admin REST API            │                      │ starts workflows / events
 └───────────────────────────────┘  ┌───────────────────▼──────────────────┐
@@ -140,13 +140,13 @@ Key rule we will implement: **every non-idempotent forward step gets a matching 
                                    │         deleteTenantRecord            │
                                    └───────────────────┬──────────────────┘
                                                        │ control-plane data
-┌───────────────────────────────────────────────────────▼──────────────────┐
+┌──────────────────────────────────────────────────────▼────────────────────┐
 │  POSTGRESQL                                                               │
 │  platform_db (control plane)                                              │
 │    ├─ tenants                                                             │
 │    ├─ audit_events        ← every workflow step writes here               │
 │    ├─ workflow_instances  ← workflow metadata + status                    │
-│  tenant_<id>_db (one real database per dedicated tenant)                   │
+│  tenant_<id>_db (one real database per dedicated tenant)                  │
 │  + redis containers + app containers (all via Docker)                     │
 └───────────────────────────────────────────────────────────────────────────┘
 ```

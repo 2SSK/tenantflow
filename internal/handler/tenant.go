@@ -23,6 +23,7 @@ type WorkflowStarter interface {
 
 type TenantStore interface {
 	GetTenant(ctx context.Context, tenantID string) (*model.Tenant, error)
+	ListTenants(ctx context.Context) ([]model.Tenant, error)
 }
 
 // TenantHandler handles /api/v1/tenants endpoints.
@@ -67,6 +68,11 @@ type DeleteTenantResponse struct {
 	TenantID   string `json:"tenantID"`
 	WorkflowID string `json:"workflowID"`
 	Status     string `json:"status"`
+}
+
+// ListTenantsResponse is returned by GET /api/v1/tenants
+type ListTenantsResponse struct {
+	Tenants []TenantResponse `json:"tenants"`
 }
 
 func (h *TenantHandler) CreateTenant(w http.ResponseWriter, r *http.Request) {
@@ -187,4 +193,20 @@ func (h *TenantHandler) DeleteTenant(w http.ResponseWriter, r *http.Request) {
 		WorkflowID: run.GetID(),
 		Status:     string(model.TenantStatusDeleting),
 	})
+}
+
+func (h *TenantHandler) ListTenants(w http.ResponseWriter, r *http.Request) {
+	tenants, err := h.store.ListTenants(r.Context())
+	if err != nil {
+		h.log.Error("list tenants", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to list tenants")
+		return
+	}
+
+	resp := ListTenantsResponse{Tenants: make([]TenantResponse, 0, len(tenants))}
+	for _, t := range tenants {
+		resp.Tenants = append(resp.Tenants, toTenantResponse(&t))
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
