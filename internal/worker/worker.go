@@ -23,9 +23,9 @@ type activityRegistration struct {
 	name string
 }
 
-func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, log *slog.Logger) *Worker {
-	provision := activities.NewProvisionActivities(repo)
-	deprovision := activities.NewDeprovisionActivities(repo)
+func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, auditRepo repository.AuditRepository, log *slog.Logger) *Worker {
+	provision := activities.NewProvisionActivities(repo, auditRepo)
+	deprovision := activities.NewDeprovisionActivities(repo, auditRepo)
 
 	sdk := sdkworker.New(tc.Client, tfworkflow.TaskQueue, sdkworker.Options{})
 

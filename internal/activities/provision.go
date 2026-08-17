@@ -19,11 +19,12 @@ const (
 )
 
 type ProvisionActivities struct {
-	repo repository.TenantRepository
+	repo      repository.TenantRepository
+	auditRepo repository.AuditRepository
 }
 
-func NewProvisionActivities(repo repository.TenantRepository) *ProvisionActivities {
-	return &ProvisionActivities{repo: repo}
+func NewProvisionActivities(repo repository.TenantRepository, auditRepo repository.AuditRepository) *ProvisionActivities {
+	return &ProvisionActivities{repo: repo, auditRepo: auditRepo}
 }
 
 func (a *ProvisionActivities) CreateTenantRecord(ctx context.Context, tenantID string, workflowID string) error {
@@ -35,7 +36,17 @@ func (a *ProvisionActivities) CreateTenantRecord(ctx context.Context, tenantID s
 		WorkflowID: &workflowID,
 	}
 
-	return a.repo.CreateTenant(ctx, tenant)
+	if err := a.repo.CreateTenant(ctx, tenant); err != nil {
+		return err
+	}
+
+	return a.auditRepo.WriteEvent(ctx, &model.AuditEvent{
+		TenantID:   tenantID,
+		WorkflowID: &workflowID,
+		EventType:  model.AuditEventTenantCreated,
+		Actor:      "workflow",
+		Payload:    map[string]any{"status": "provisioning"},
+	})
 }
 
 func (a *ProvisionActivities) ProvisionTenant(ctx context.Context, tenantID string) error {
@@ -47,7 +58,12 @@ func (a *ProvisionActivities) ProvisionTenant(ctx context.Context, tenantID stri
 
 	time.Sleep(2 * time.Second)
 
-	return nil
+	return a.auditRepo.WriteEvent(ctx, &model.AuditEvent{
+		TenantID:  tenantID,
+		EventType: model.AuditEventTenantProvisioned,
+		Actor:     "workflow",
+		Payload:   map[string]any{"infra": "simulated"},
+	})
 }
 
 func (a *ProvisionActivities) MarkTenantActive(ctx context.Context, tenantID string) error {
@@ -56,7 +72,13 @@ func (a *ProvisionActivities) MarkTenantActive(ctx context.Context, tenantID str
 	if err := a.repo.UpdateTenantStatus(ctx, tenantID, model.TenantStatusActive); err != nil {
 		return fmt.Errorf("mark tenant %s active: %w", tenantID, err)
 	}
-	return nil
+
+	return a.auditRepo.WriteEvent(ctx, &model.AuditEvent{
+		TenantID:  tenantID,
+		EventType: model.AuditEventTenantActivated,
+		Actor:     "workflow",
+		Payload:   map[string]any{},
+	})
 }
 
 func (a *ProvisionActivities) MarkTenantFailed(ctx context.Context, tenantID string) error {
@@ -65,5 +87,10 @@ func (a *ProvisionActivities) MarkTenantFailed(ctx context.Context, tenantID str
 	if err := a.repo.UpdateTenantStatus(ctx, tenantID, model.TenantStatusFailed); err != nil {
 		return fmt.Errorf("mark tenant %s failed: %w", tenantID, err)
 	}
-	return nil
+	return a.auditRepo.WriteEvent(ctx, &model.AuditEvent{
+		TenantID:  tenantID,
+		EventType: model.AuditEventTenantFailed,
+		Actor:     "workflow",
+		Payload:   map[string]any{"reason": "saga compensation"},
+	})
 }

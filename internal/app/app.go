@@ -16,11 +16,12 @@ import (
 )
 
 type App struct {
-	Config config.Config
-	Log    *slog.Logger
-	TC     *temporal.Client
-	DB     *database.DB
-	Repo   *repository.PostgresTenantRepository
+	Config    config.Config
+	Log       *slog.Logger
+	TC        *temporal.Client
+	DB        *database.DB
+	Repo      *repository.PostgresTenantRepository
+	AuditRepo *repository.PostgresAuditRepository
 }
 
 func New(ctx context.Context, process string) (*App, error) {
@@ -50,13 +51,15 @@ func New(ctx context.Context, process string) (*App, error) {
 	}
 
 	repo := repository.NewPostgresTenantRepository(db.Pool)
+	auditRepo := repository.NewPostgresAuditRepository(db.Pool)
 
 	return &App{
-		Config: cfg,
-		Log:    log,
-		TC:     tc,
-		DB:     db,
-		Repo:   repo,
+		Config:    cfg,
+		Log:       log,
+		TC:        tc,
+		DB:        db,
+		Repo:      repo,
+		AuditRepo: auditRepo,
 	}, nil
 }
 

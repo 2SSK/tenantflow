@@ -17,17 +17,27 @@ const (
 )
 
 type DeprovisionActivities struct {
-	repo repository.TenantRepository
+	repo      repository.TenantRepository
+	auditRepo repository.AuditRepository
 }
 
-func NewDeprovisionActivities(repo repository.TenantRepository) *DeprovisionActivities {
-	return &DeprovisionActivities{repo: repo}
+func NewDeprovisionActivities(repo repository.TenantRepository, auditRepo repository.AuditRepository) *DeprovisionActivities {
+	return &DeprovisionActivities{repo: repo, auditRepo: auditRepo}
 }
 
 func (a *DeprovisionActivities) MarkTenantDeleting(ctx context.Context, tenantID string) error {
 	activity.GetLogger(ctx).Info("Marking tenant deleting", "tenantID", tenantID)
 
-	return a.repo.UpdateTenantStatus(ctx, tenantID, model.TenantStatusDeleting)
+	if err := a.repo.UpdateTenantStatus(ctx, tenantID, model.TenantStatusDeleting); err != nil {
+		return err
+	}
+
+	return a.auditRepo.WriteEvent(ctx, &model.AuditEvent{
+		TenantID:  tenantID,
+		EventType: model.AuditEventTenantDeleting,
+		Actor:     "workflow",
+		Payload:   map[string]any{},
+	})
 }
 
 func (a *DeprovisionActivities) DeprovisionTenant(ctx context.Context, tenantID string) error {
@@ -35,7 +45,12 @@ func (a *DeprovisionActivities) DeprovisionTenant(ctx context.Context, tenantID 
 
 	time.Sleep(2 * time.Second)
 
-	return nil
+	return a.auditRepo.WriteEvent(ctx, &model.AuditEvent{
+		TenantID:  tenantID,
+		EventType: model.AuditEventTenantDeprovisioned,
+		Actor:     "workflow",
+		Payload:   map[string]any{"infra": "simulated teardown"},
+	})
 }
 
 func (a *DeprovisionActivities) MarkTenantDeleted(ctx context.Context, tenantID string) error {
@@ -45,5 +60,10 @@ func (a *DeprovisionActivities) MarkTenantDeleted(ctx context.Context, tenantID 
 		return fmt.Errorf("mark tenant %s deleted: %w", tenantID, err)
 	}
 
-	return nil
+	return a.auditRepo.WriteEvent(ctx, &model.AuditEvent{
+		TenantID:  tenantID,
+		EventType: model.AuditEventTenantDeleted,
+		Actor:     "workflow",
+		Payload:   map[string]any{},
+	})
 }

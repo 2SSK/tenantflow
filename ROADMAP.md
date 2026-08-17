@@ -480,28 +480,31 @@ TenantProvisionWorkflow (workflowId = "provision-" + tenantID)
 ### Compensation (the Saga pattern in Temporal)
 
 ```go
-// shape of the workflow (concept, not final code)
-func TenantProvisionWorkflow(ctx workflow.Context, input TenantProvisionInput) error {
-    comp := workflow.NewCompensator(ctx)           // Temporal's built-in saga helper
-    defer comp.Compensate(ctx)                     // runs compensations if workflow returns error
-
-    err := workflow.ExecuteActivity(ctx, act.CreateTenantRecord, input).Get(ctx, nil)
-    comp.AddCompensation(act.DeleteTenantRecord, input.TenantID)   // A⁻
+// Official Temporal Go saga pattern (verified: temporalio/samples-go/saga/workflow.go)
+// workflow.Defer does NOT exist in Go SDK v1.47.0 — use plain Go defer with named return
+func ProvisionTenantWorkflow(ctx workflow.Context, input ProvisionInput) (err error) {
+    // Step 1: forward
+    err = workflow.ExecuteActivity(ctx, activities.CreateTenantRecord, input).Get(ctx, nil)
     if err != nil { return err }
 
-    err = workflow.ExecuteActivity(ctx, act.CreatePostgresDatabase, input).Get(ctx, nil)
-    comp.AddCompensation(act.DropPostgresDatabase, input.TenantID) // B⁻
-    if err != nil { return err }
-    // ... etc (including DeleteTenantIdentity for step 5)
+    // Register compensation right after forward step succeeds (NOT after all steps)
+    // LIFO order = defer registers in forward order, executes in reverse
+    defer func() {
+        if err != nil {
+            // compensation logic: call MarkTenantFailed, join errors
+        }
+    }()
 
-    err = workflow.ExecuteActivity(ctx, act.CreateAppContainer, input).Get(ctx, nil)
-    if err != nil { return err }                   // ← failure here triggers A⁻..F⁻
-    // ...
+    // Step 2: forward (compensation already registered above)
+    err = workflow.ExecuteActivity(ctx, activities.ProvisionTenant, input).Get(ctx, nil)
+    if err != nil { return err }
+
+    // ...more steps...
     return nil
 }
 ```
 
-If any step returns an error (after retries are exhausted), `defer comp.Compensate(ctx)` runs every registered compensation **in reverse order**. That is the Saga.
+If any step returns an error (after retries are exhausted), `defer` runs every registered compensation **in reverse order (LIFO)**. That is the Saga.
 
 ### Compensation design rules (interview-grade rules we'll implement)
 
@@ -841,12 +844,12 @@ Next.js app in `web/`:
 
 ### SAGA / distributed transactions
 
-- [ ] Saga = local transactions + compensation, not a 2PC distributed transaction
-- [ ] Orchestration (central coordinator) vs choreography (event-driven) sagas — and why Temporal = orchestration
+- [x] Saga = local transactions + compensation, not a 2PC distributed transaction
+- [x] Orchestration (central coordinator) vs choreography (event-driven) sagas — and why Temporal = orchestration
 - [ ] Idempotency keys: making retries and compensations safe
 - [ ] The outbox pattern: why we persist "intent" (audit events) before/with side effects
 - [ ] Exactly-once is a lie; aim for at-least-once + idempotent handlers
-- [ ] The failure ladder: retries → compensation → DLQ (failed state + manual replay)
+- [x] The failure ladder: retries → compensation → DLQ (failed state + manual replay)
 
 ### PostgreSQL
 
