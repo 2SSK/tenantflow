@@ -5,9 +5,9 @@
 > **Career goal this serves:** grow from DevOps/SRE → Platform Engineering, while building real fullstack skills. This is the "mini Kubernetes-for-tenants" project: instead of managing VMs, you manage _tenants_.
 
 **Created:** 2026-08-02
-**Updated:** 2026-08-02 (Keycloak IAM added; portfolio review incorporated — migration workflow, backup verification, DLQ, workflow versioning, cost view)
+**Updated:** 2026-08-17 (SAGA Compensations milestone complete — chaos hook, MarkTenantFailed activity, LIFO workflow, workflow tests)
 **Boilerplate:** https://github.com/2SSK/go-echo-boilerplate
-**Status:** Planning (Phase 0 not started)
+**Status:** Phase 0 + Phase 2 (partial) + Phase 4 (partial) — SAGA milestone committed
 
 ---
 
@@ -690,13 +690,13 @@ Next.js app in `web/`:
 
 | #   | Task                                                       | Status |
 | --- | ---------------------------------------------------------- | ------ |
-| 0.1 | Project created from boilerplate (module renamed)          | ☐      |
-| 0.2 | Env prefix renamed to `TENANTFLOW_`                        | ☐      |
-| 0.3 | App runs: `/status` healthy, `/docs` serves                | ☐      |
-| 0.4 | docker-compose stack (postgres/redis/temporal/keycloak) up | ☐      |
+| 0.1 | Project created from boilerplate (module renamed)          | ☑      |
+| 0.2 | Env prefix renamed to `TENANTFLOW_`                        | ☑      |
+| 0.3 | App runs: `/status` healthy, `/docs` serves                | ☑      |
+| 0.4 | docker-compose stack (postgres/redis/temporal/keycloak) up | ☑      |
 | 0.5 | Keycloak realm imported + admin console reachable          | ☐      |
-| 0.6 | Go deps added (temporal, oidc, gocloak)                    | ☐      |
-| 0.7 | Boilerplate layers read + questions listed                 | ☐      |
+| 0.6 | Go deps added (temporal, oidc, gocloak)                    | ☑      |
+| 0.7 | Boilerplate layers read + questions listed                 | ☑      |
 
 ### Phase 1 — Identity & Access (Keycloak)
 
@@ -715,12 +715,12 @@ Next.js app in `web/`:
 
 | #   | Task                           | Status |
 | --- | ------------------------------ | ------ |
-| 2.1 | `tenants` migration            | ☐      |
+| 2.1 | `tenants` migration            | ☑      |
 | 2.2 | `audit_events` migration       | ☐      |
 | 2.3 | `workflow_instances` migration | ☐      |
-| 2.4 | Go models                      | ☐      |
-| 2.5 | Repositories                   | ☐      |
-| 2.6 | Repo tests                     | ☐      |
+| 2.4 | Go models                      | ☑      |
+| 2.5 | Repositories                   | ☑      |
+| 2.6 | Repo tests                     | ☑      |
 
 ### Phase 3 — Cloud provider
 
@@ -734,14 +734,14 @@ Next.js app in `web/`:
 
 | #   | Task                                 | Status |
 | --- | ------------------------------------ | ------ |
-| 4.1 | Provision activities + compensations | ☐      |
+| 4.1 | Provision activities + compensations | ☑      |
 | 4.2 | Identity activities (gocloak)        | ☐      |
-| 4.3 | `TenantProvisionWorkflow`            | ☐      |
-| 4.4 | Temporal client + worker             | ☐      |
-| 4.5 | Tenant API (POST/GET)                | ☐      |
+| 4.3 | `TenantProvisionWorkflow`            | ☑      |
+| 4.4 | Temporal client + worker             | ☑      |
+| 4.5 | Tenant API (POST/GET)                | ☑      |
 | 4.6 | Audit events from activities         | ☐      |
-| 4.7 | Failure demo: compensation verified  | ☐      |
-| 4.8 | Minimal chaos hook                   | ☐      |
+| 4.7 | Failure demo: compensation verified  | ☑      |
+| 4.8 | Minimal chaos hook                   | ☑      |
 
 ### Phase 5 — Dashboard
 
@@ -828,13 +828,16 @@ Next.js app in `web/`:
 
 ### Temporal
 
-- [ ] Workflows are deterministic; Activities are where side effects live
-- [ ] Temporal replay / event history — why a workflow survives restarts
-- [ ] Retries vs compensation: when each applies
-- [ ] `workflow.NewCompensator` — the saga helper; why compensation order is reverse
+- [x] Workflows are deterministic; Activities are where side effects live
+- [x] Temporal replay / event history — why a workflow survives restarts
+- [x] Retries vs compensation: when each applies
+- [x] `workflow.NewCompensator` — the saga helper; why compensation order is reverse
 - [ ] Signals, queries, and updates — and when to use each
 - [ ] Workflow versioning (changing a workflow that has running instances)
-- [ ] Why `time.Now()`, `rand`, and direct I/O are forbidden in workflow code
+- [x] Why `time.Now()`, `rand`, and direct I/O are forbidden in workflow code
+- [x] Official Temporal Go saga pattern: named return `(err error)` + plain `defer` + LIFO `errors.Join`
+- [x] `testsuite.WorkflowTestSuite`: register → mock → assert (OnActivity is override, not register)
+- [x] Test env auto-skips timers for fast tests; retry policy still respected
 
 ### SAGA / distributed transactions
 

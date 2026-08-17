@@ -38,6 +38,7 @@ func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, log *sl
 		{fn: provision.CreateTenantRecord, name: activities.CreateTenantRecordActivityName},
 		{fn: provision.ProvisionTenant, name: activities.ProvisionTenantActivityName},
 		{fn: provision.MarkTenantActive, name: activities.MarkTenantActiveActivityName},
+		{fn: provision.MarkTenantFailed, name: activities.MarkTenantFailedActivityName},
 		{fn: deprovision.MarkTenantDeleting, name: activities.MarkTenantDeletingActivityName},
 		{fn: deprovision.DeprovisionTenant, name: activities.DeprovisionTenantActivityName},
 		{fn: deprovision.MarkTenantDeleted, name: activities.MarkTenantDeletedActivityName},

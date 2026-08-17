@@ -3,6 +3,7 @@ package activities
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/2SSK/tenantflow/internal/model"
@@ -14,6 +15,7 @@ const (
 	CreateTenantRecordActivityName = "CreateTenantRecord"
 	ProvisionTenantActivityName    = "ProvisionTenant"
 	MarkTenantActiveActivityName   = "MarkTenantActive"
+	MarkTenantFailedActivityName   = "MarkTenantFailed"
 )
 
 type ProvisionActivities struct {
@@ -39,6 +41,10 @@ func (a *ProvisionActivities) CreateTenantRecord(ctx context.Context, tenantID s
 func (a *ProvisionActivities) ProvisionTenant(ctx context.Context, tenantID string) error {
 	activity.GetLogger(ctx).Info("Provision tenant", "tenantID", tenantID)
 
+	if strings.HasPrefix(tenantID, "fail-") {
+		return fmt.Errorf("simulated provisioning failure for tenant %s", tenantID)
+	}
+
 	time.Sleep(2 * time.Second)
 
 	return nil
@@ -49,6 +55,15 @@ func (a *ProvisionActivities) MarkTenantActive(ctx context.Context, tenantID str
 
 	if err := a.repo.UpdateTenantStatus(ctx, tenantID, model.TenantStatusActive); err != nil {
 		return fmt.Errorf("mark tenant %s active: %w", tenantID, err)
+	}
+	return nil
+}
+
+func (a *ProvisionActivities) MarkTenantFailed(ctx context.Context, tenantID string) error {
+	activity.GetLogger(ctx).Info("Marking tenant failed (saga compensation)", "tenantID", tenantID)
+
+	if err := a.repo.UpdateTenantStatus(ctx, tenantID, model.TenantStatusFailed); err != nil {
+		return fmt.Errorf("mark tenant %s failed: %w", tenantID, err)
 	}
 	return nil
 }
