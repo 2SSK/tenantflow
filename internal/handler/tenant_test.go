@@ -33,6 +33,8 @@ type stubTenantStore struct {
 	err     error
 }
 
+type stubAuditStore struct{}
+
 func (s *stubWorkflowStarter) ExecuteWorkflow(ctx context.Context, options client.StartWorkflowOptions, workflow any, args ...any) (client.WorkflowRun, error) {
 	s.startedOptions = options
 	s.startedArgs = args
@@ -61,7 +63,7 @@ func (s *stubTenantStore) ListTenants(ctx context.Context) ([]model.Tenant, erro
 }
 
 func newTestTenantHandler(s *stubWorkflowStarter, store TenantStore) *TenantHandler {
-	return NewTenantHandler(s, store, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	return NewTenantHandler(s, store, &stubAuditStore{}, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
 }
 
 func TestCreateTenatAccept(t *testing.T) {
@@ -323,4 +325,8 @@ func TestDeleteTenant(t *testing.T) {
 			}
 		})
 	}
+}
+
+func (s *stubAuditStore) ListEvents(ctx context.Context, tenantID string) ([]model.AuditEvent, error) {
+	return nil, nil
 }

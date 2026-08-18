@@ -26,19 +26,25 @@ type TenantStore interface {
 	ListTenants(ctx context.Context) ([]model.Tenant, error)
 }
 
+type AuditStore interface {
+	ListEvents(ctx context.Context, tenantID string) ([]model.AuditEvent, error)
+}
+
 // TenantHandler handles /api/v1/tenants endpoints.
 type TenantHandler struct {
-	temporal WorkflowStarter
-	store    TenantStore
-	log      *slog.Logger
+	temporal   WorkflowStarter
+	store      TenantStore
+	auditStore AuditStore
+	log        *slog.Logger
 }
 
 // NewTenantHandler wires a TenantHandler with its dependencies.
-func NewTenantHandler(tc WorkflowStarter, store TenantStore, log *slog.Logger) *TenantHandler {
+func NewTenantHandler(tc WorkflowStarter, store TenantStore, auditStore AuditStore, log *slog.Logger) *TenantHandler {
 	return &TenantHandler{
-		temporal: tc,
-		store:    store,
-		log:      log,
+		temporal:   tc,
+		store:      store,
+		auditStore: auditStore,
+		log:        log,
 	}
 }
 
@@ -209,4 +215,31 @@ func (h *TenantHandler) ListTenants(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *TenantHandler) ListEvents(w http.ResponseWriter, r *http.Request) {
+	tenantID := r.PathValue("tenantID")
+
+	if _, err := h.store.GetTenant(r.Context(), tenantID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "tenant not found")
+			return
+		}
+		h.log.Error("get tenant for events", "tenantID", tenantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get tenant")
+		return
+	}
+
+	events, err := h.auditStore.ListEvents(r.Context(), tenantID)
+	if err != nil {
+		h.log.Error("list events", "tenantID", tenantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to list events")
+		return
+	}
+
+	if events == nil {
+		events = []model.AuditEvent{}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"events": events})
 }
