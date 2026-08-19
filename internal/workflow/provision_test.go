@@ -15,7 +15,7 @@ func TestProvisionWorkflow_SuccessDoesNotCompensate(t *testing.T) {
 	ts := &testsuite.WorkflowTestSuite{}
 	env := ts.NewTestWorkflowEnvironment()
 
-	env.RegisterActivity(activities.NewProvisionActivities(nil, nil))
+	env.RegisterActivity(activities.NewProvisionActivities(nil, nil, nil))
 
 	env.OnActivity(activities.CreateTenantRecordActivityName, mock.Anything, "acme-ok", mock.Anything).Return(nil)
 	env.OnActivity(activities.ProvisionTenantActivityName, mock.Anything, "acme-ok").Return(nil)
@@ -37,7 +37,7 @@ func TestProvisionWorkflow_FailureCompensates(t *testing.T) {
 	ts := &testsuite.WorkflowTestSuite{}
 	env := ts.NewTestWorkflowEnvironment()
 
-	env.RegisterActivity(activities.NewProvisionActivities(nil, nil))
+	env.RegisterActivity(activities.NewProvisionActivities(nil, nil, nil))
 
 	env.OnActivity(activities.CreateTenantRecordActivityName, mock.Anything, "fail-tenant", mock.Anything).Return(nil)
 	env.OnActivity(activities.ProvisionTenantActivityName, mock.Anything, "fail-tenant").Return(fmt.Errorf("simulated provisioning failure"))

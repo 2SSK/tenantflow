@@ -8,6 +8,7 @@ import (
 
 	"github.com/joho/godotenv"
 
+	"github.com/2SSK/tenantflow/internal/cloud"
 	"github.com/2SSK/tenantflow/internal/config"
 	"github.com/2SSK/tenantflow/internal/database"
 	"github.com/2SSK/tenantflow/internal/logger"
@@ -22,6 +23,7 @@ type App struct {
 	DB        *database.DB
 	Repo      *repository.PostgresTenantRepository
 	AuditRepo *repository.PostgresAuditRepository
+	Provider  cloud.CloudProvider
 }
 
 func New(ctx context.Context, process string) (*App, error) {
@@ -53,6 +55,13 @@ func New(ctx context.Context, process string) (*App, error) {
 	repo := repository.NewPostgresTenantRepository(db.Pool)
 	auditRepo := repository.NewPostgresAuditRepository(db.Pool)
 
+	provider, err := cloud.NewDockerProvider(log)
+	if err != nil {
+		tc.Close()
+		db.Close()
+		return nil, fmt.Errorf("cloud provider: %w", err)
+	}
+
 	return &App{
 		Config:    cfg,
 		Log:       log,
@@ -60,6 +69,7 @@ func New(ctx context.Context, process string) (*App, error) {
 		DB:        db,
 		Repo:      repo,
 		AuditRepo: auditRepo,
+		Provider:  provider,
 	}, nil
 }
 

@@ -25,7 +25,7 @@ func run() error {
 	}
 	defer a.Close()
 
-	w := tfworker.New(a.TC, a.Repo, a.AuditRepo, a.Log)
+	w := tfworker.New(a.TC, a.Repo, a.AuditRepo, a.Provider, a.Log)
 
 	return w.Run()
 }

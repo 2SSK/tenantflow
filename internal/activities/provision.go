@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
+	"github.com/2SSK/tenantflow/internal/cloud"
 	"github.com/2SSK/tenantflow/internal/model"
 	"github.com/2SSK/tenantflow/internal/repository"
 	"go.temporal.io/sdk/activity"
@@ -16,15 +16,17 @@ const (
 	ProvisionTenantActivityName    = "ProvisionTenant"
 	MarkTenantActiveActivityName   = "MarkTenantActive"
 	MarkTenantFailedActivityName   = "MarkTenantFailed"
+	DropTenantDatabaseActivityName = "DropTenantDatabase"
 )
 
 type ProvisionActivities struct {
 	repo      repository.TenantRepository
 	auditRepo repository.AuditRepository
+	provider  cloud.CloudProvider
 }
 
-func NewProvisionActivities(repo repository.TenantRepository, auditRepo repository.AuditRepository) *ProvisionActivities {
-	return &ProvisionActivities{repo: repo, auditRepo: auditRepo}
+func NewProvisionActivities(repo repository.TenantRepository, auditRepo repository.AuditRepository, provider cloud.CloudProvider) *ProvisionActivities {
+	return &ProvisionActivities{repo: repo, auditRepo: auditRepo, provider: provider}
 }
 
 func (a *ProvisionActivities) CreateTenantRecord(ctx context.Context, tenantID string, workflowID string) error {
@@ -56,7 +58,9 @@ func (a *ProvisionActivities) ProvisionTenant(ctx context.Context, tenantID stri
 		return fmt.Errorf("simulated provisioning failure for tenant %s", tenantID)
 	}
 
-	time.Sleep(2 * time.Second)
+	if err := a.provider.CreateDatabase(ctx, tenantID); err != nil {
+		return fmt.Errorf("create database for tenant %s: %w", tenantID, err)
+	}
 
 	return a.auditRepo.WriteEvent(ctx, &model.AuditEvent{
 		TenantID:  tenantID,
@@ -92,5 +96,20 @@ func (a *ProvisionActivities) MarkTenantFailed(ctx context.Context, tenantID str
 		EventType: model.AuditEventTenantFailed,
 		Actor:     "workflow",
 		Payload:   map[string]any{"reason": "saga compensation"},
+	})
+}
+
+func (a *ProvisionActivities) DropTenantDatabase(ctx context.Context, tenantID string) error {
+	activity.GetLogger(ctx).Info("Dropping tenant database (saga compensation)", "tenantID", tenantID)
+
+	if err := a.provider.DropDatabase(ctx, tenantID); err != nil {
+		return fmt.Errorf("drop database for tenant %s: %w", tenantID, err)
+	}
+
+	return a.auditRepo.WriteEvent(ctx, &model.AuditEvent{
+		TenantID:  tenantID,
+		EventType: model.AuditEventTenantFailed,
+		Actor:     "workflow",
+		Payload:   map[string]any{"action": "database_dropped", "reason": "saga compensation"},
 	})
 }

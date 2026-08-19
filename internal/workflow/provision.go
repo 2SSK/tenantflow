@@ -38,8 +38,9 @@ func ProvisionTenantWorkflow(ctx workflow.Context, in ProvisionInput) (err error
 
 	defer func() {
 		if err != nil {
-			compErr := workflow.ExecuteActivity(actCtx, activities.MarkTenantFailedActivityName, in.TenantID).Get(actCtx, nil)
-			err = errors.Join(err, compErr)
+			dropErr := workflow.ExecuteActivity(actCtx, activities.DropTenantDatabaseActivityName, in.TenantID).Get(actCtx, nil)
+			failErr := workflow.ExecuteActivity(actCtx, activities.MarkTenantFailedActivityName, in.TenantID).Get(actCtx, nil)
+			err = errors.Join(err, dropErr, failErr)
 		}
 	}()
 
