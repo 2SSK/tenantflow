@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS workflow_instances (
   status text NOT NULL,
   error jsonb,
   started_at timestamptz NOT NULL DEFAULT now(),
-  finished_at timestamptz,
+  finished_at timestamptz
 );
 
 -- Look up by Temporal workflow ID (for status queries)

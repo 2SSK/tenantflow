@@ -28,16 +28,16 @@ func (d *DockerProvider) CreateDatabase(ctx context.Context, tenantID string) er
 	dbName := "tenant_" + tenantID
 	d.log.Info("creating tenant database", "database", dbName)
 
-	return d.execPostgres(ctx, fmt.Sprintf("CREATE DATABASE %s", dbName))
+	return d.execPostgres(ctx, fmt.Sprintf(`CREATE DATABASE "%s"`, dbName))
 }
 
 func (d *DockerProvider) DropDatabase(ctx context.Context, tenantID string) error {
 	dbName := "tenant_" + tenantID
 	d.log.Info("dropping tenant database", "database", dbName)
 
-	d.execPostgres(ctx, fmt.Sprintf("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '%s'", dbName))
+	d.execPostgres(ctx, fmt.Sprintf(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '%s'`, dbName))
 
-	return d.execPostgres(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", dbName))
+	return d.execPostgres(ctx, fmt.Sprintf(`DROP DATABASE IF EXISTS "%s"`, dbName))
 }
 
 func (d *DockerProvider) execPostgres(ctx context.Context, sql string) error {
