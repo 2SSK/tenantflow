@@ -719,8 +719,8 @@ Next.js app in `web/`:
 | #   | Task                           | Status |
 | --- | ------------------------------ | ------ |
 | 2.1 | `tenants` migration            | ☑      |
-| 2.2 | `audit_events` migration       | ☐      |
-| 2.3 | `workflow_instances` migration | ☐      |
+| 2.2 | `audit_events` migration       | ☑      |
+| 2.3 | `workflow_instances` migration | ☑      |
 | 2.4 | Go models                      | ☑      |
 | 2.5 | Repositories                   | ☑      |
 | 2.6 | Repo tests                     | ☑      |
@@ -729,9 +729,9 @@ Next.js app in `web/`:
 
 | #   | Task                            | Status |
 | --- | ------------------------------- | ------ |
-| 3.1 | `CloudProvider` interface       | ☐      |
-| 3.2 | `DockerProvider` implementation | ☐      |
-| 3.3 | Manual create/drop verification | ☐      |
+| 3.1 | `CloudProvider` interface       | ☑      |
+| 3.2 | `DockerProvider` implementation | ☑      |
+| 3.3 | Manual create/drop verification | ☑      |
 
 ### Phase 4 — Provision Saga
 
@@ -742,9 +742,10 @@ Next.js app in `web/`:
 | 4.3 | `TenantProvisionWorkflow`            | ☑      |
 | 4.4 | Temporal client + worker             | ☑      |
 | 4.5 | Tenant API (POST/GET)                | ☑      |
-| 4.6 | Audit events from activities         | ☐      |
+| 4.6 | Audit events from activities         | ☑      |
 | 4.7 | Failure demo: compensation verified  | ☑      |
 | 4.8 | Minimal chaos hook                   | ☑      |
+| 4.9 | Audit timeline endpoint (GET events) | ☑      |
 
 ### Phase 5 — Dashboard
 
@@ -856,14 +857,14 @@ Next.js app in `web/`:
 - [ ] Writing versioned migrations with tern; why `schema_version` table exists
 - [ ] UUID keys, timestamptz, JSONB payloads for audit
 - [ ] Unique constraints as a _feature_ (slug uniqueness → friendly 400 via sqlerr)
-- [ ] Creating/dropping databases at runtime (for tenant provisioning) — connection pooling gotchas
-- [ ] Indexing the audit trail (tenant_id, created_at DESC) for the timeline UI
+- [x] Creating/dropping databases at runtime (for tenant provisioning) — connection pooling gotchas
+- [x] Indexing the audit trail (tenant_id, created_at DESC) for the timeline UI
 - [ ] Backup verification: restore to a temp DB → validate → drop temp → mark verified
 - [ ] Live migration flow: lock → snapshot → sync → switch traffic → unlock (and its failure modes)
 
 ### Platform engineering / fullstack
 
-- [ ] Provider abstraction: why the `CloudProvider` interface is the platform boundary
+- [x] Provider abstraction: why the `CloudProvider` interface is the platform boundary
 - [ ] Async API design: 202 Accepted + workflowId + status polling/SSE
 - [ ] Observability of a control plane: provision time, success rate, compensation count
 - [ ] React + SSE: rendering a live event stream without polling the DB
@@ -913,7 +914,7 @@ Decisions to make _when we reach them_ (not now):
 - [ ] **Token validation library:** go-oidc verifier (recommended) vs raw go-jose (we may peek at go-jose internals for learning)
 - [ ] **Per-tenant IAM:** one client per tenant created by the saga (recommended) vs per-tenant realm (heavier, more isolation)
 - [ ] **gocloak vs raw HTTP** for admin API calls in activities (gocloak v14 recommended; raw HTTP is a good learning exercise)
-- [ ] **Provider depth:** Docker CLI vs Docker SDK (`docker/docker` Go client)?
+- [x] **Provider depth:** Docker CLI vs Docker SDK (`docker/docker` Go client)? → Docker SDK chosen
 - [ ] **Frontend framework:** Next.js App Router (recommended) vs Vite + React?
 - [ ] **Worker placement:** same binary with `cmd/api` + `cmd/worker` (recommended) vs separate repo?
 - [ ] **Shared-schema enforcement:** app-level `tenant_id` filters vs PostgreSQL RLS?
