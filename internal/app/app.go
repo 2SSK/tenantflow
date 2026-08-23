@@ -8,6 +8,7 @@ import (
 
 	"github.com/joho/godotenv"
 
+	"github.com/2SSK/tenantflow/internal/auth"
 	"github.com/2SSK/tenantflow/internal/cloud"
 	"github.com/2SSK/tenantflow/internal/config"
 	"github.com/2SSK/tenantflow/internal/database"
@@ -24,6 +25,7 @@ type App struct {
 	Repo      *repository.PostgresTenantRepository
 	AuditRepo *repository.PostgresAuditRepository
 	Provider  cloud.CloudProvider
+	Auth      *auth.Provider
 }
 
 func New(ctx context.Context, process string) (*App, error) {
@@ -62,6 +64,20 @@ func New(ctx context.Context, process string) (*App, error) {
 		return nil, fmt.Errorf("cloud provider: %w", err)
 	}
 
+	authProvider, err := auth.NewProvider(ctx,
+		cfg.KeycloakURL,
+		cfg.KeycloakRealm,
+		cfg.KeycloakClientID,
+		cfg.KeycloakSecret,
+		cfg.KeycloakRedirectURL,
+		log,
+	)
+	if err != nil {
+		tc.Close()
+		db.Close()
+		return nil, fmt.Errorf("oidc provider: %w", err)
+	}
+
 	return &App{
 		Config:    cfg,
 		Log:       log,
@@ -70,6 +86,7 @@ func New(ctx context.Context, process string) (*App, error) {
 		Repo:      repo,
 		AuditRepo: auditRepo,
 		Provider:  provider,
+		Auth:      authProvider,
 	}, nil
 }
 
