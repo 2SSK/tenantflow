@@ -697,7 +697,7 @@ Next.js app in `web/`:
 | 0.2 | Env prefix renamed to `TENANTFLOW_`                        | ☑      |
 | 0.3 | App runs: `/status` healthy, `/docs` serves                | ☑      |
 | 0.4 | docker-compose stack (postgres/redis/temporal/keycloak) up | ☑      |
-| 0.5 | Keycloak realm imported + admin console reachable          | ☐      |
+| 0.5 | Keycloak realm imported + admin console reachable          | ☑      |
 | 0.6 | Go deps added (temporal, oidc, gocloak)                    | ☑      |
 | 0.7 | Boilerplate layers read + questions listed                 | ☑      |
 
@@ -705,13 +705,13 @@ Next.js app in `web/`:
 
 | #   | Task                                              | Status |
 | --- | ------------------------------------------------- | ------ |
-| 1.1 | Clerk → OIDC middleware swap                      | ☐      |
-| 1.2 | `internal/auth` provider + verifier + RequireRole | ☐      |
-| 1.3 | Keycloak config added                             | ☐      |
+| 1.1 | Clerk → OIDC middleware swap                      | ☑      |
+| 1.2 | `internal/auth` provider + verifier + RequireRole | ☑      |
+| 1.3 | Keycloak config added                             | ☑      |
 | 1.4 | Clerk deps removed; gocloak admin client wired    | ☐      |
-| 1.5 | Roles + test users seeded                         | ☐      |
-| 1.6 | API protected; `/status` public                   | ☐      |
-| 1.7 | curl tests: 200 / 401 / 403 pass                  | ☐      |
+| 1.5 | Roles + test users seeded                         | ☑      |
+| 1.6 | API protected; `/status` public                   | ☑      |
+| 1.7 | curl tests: 200 / 401 / 403 pass                  | ☑      |
 | 1.8 | OIDC flow written down from memory                | ☐      |
 
 ### Phase 2 — Data model
