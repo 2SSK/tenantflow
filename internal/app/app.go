@@ -12,6 +12,7 @@ import (
 	"github.com/2SSK/tenantflow/internal/cloud"
 	"github.com/2SSK/tenantflow/internal/config"
 	"github.com/2SSK/tenantflow/internal/database"
+	"github.com/2SSK/tenantflow/internal/identity"
 	"github.com/2SSK/tenantflow/internal/logger"
 	"github.com/2SSK/tenantflow/internal/repository"
 	"github.com/2SSK/tenantflow/internal/temporal"
@@ -26,6 +27,7 @@ type App struct {
 	AuditRepo *repository.PostgresAuditRepository
 	Provider  cloud.CloudProvider
 	Auth      *auth.Provider
+	Identity  identity.IdentityProvider
 }
 
 func New(ctx context.Context, process string) (*App, error) {
@@ -78,6 +80,13 @@ func New(ctx context.Context, process string) (*App, error) {
 		return nil, fmt.Errorf("oidc provider: %w", err)
 	}
 
+	keycloakAdmin := identity.NewKeycloakProvider(
+		cfg.KeycloakURL,
+		cfg.KeycloakRealm,
+		cfg.KeycloakAdminUser,
+		cfg.KeycloakAdminPass,
+	)
+
 	return &App{
 		Config:    cfg,
 		Log:       log,
@@ -87,6 +96,7 @@ func New(ctx context.Context, process string) (*App, error) {
 		AuditRepo: auditRepo,
 		Provider:  provider,
 		Auth:      authProvider,
+		Identity:  keycloakAdmin,
 	}, nil
 }
 

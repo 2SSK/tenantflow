@@ -19,6 +19,10 @@ type Config struct {
 	KeycloakClientID    string
 	KeycloakSecret      string
 	KeycloakRedirectURL string
+
+	// Keycloak admin credentials (for user management, not API auth)
+	KeycloakAdminUser string
+	KeycloakAdminPass string
 }
 
 // Load reads configuration from the process environment.
@@ -44,6 +48,8 @@ func Load() (Config, error) {
 	cfg.KeycloakClientID = getEnv("TENANTFLOW_KEYCLOAK_CLIENT_ID", "tenantflow-api")
 	cfg.KeycloakSecret = getEnv("TENANTFLOW_KEYCLOAK_SECRET", "api-secret-123")
 	cfg.KeycloakRedirectURL = getEnv("TENANTFLOW_KEYCLOAK_REDIRECT_URL", "http://localhost:3000/callback")
+	cfg.KeycloakAdminUser = getEnv("TENANTFLOW_KEYCLOAK_ADMIN_USER", "admin")
+	cfg.KeycloakAdminPass = getEnv("TENANTFLOW_KEYCLOAK_ADMIN_PASS", "admin")
 
 	if cfg.Env != "development" && cfg.Env != "production" {
 		return Config{}, fmt.Errorf("TENANTFLOW_ENV must be development or production, got %q", cfg.Env)

@@ -6,6 +6,7 @@ import (
 
 	"github.com/2SSK/tenantflow/internal/activities"
 	"github.com/2SSK/tenantflow/internal/cloud"
+	"github.com/2SSK/tenantflow/internal/identity"
 	"github.com/2SSK/tenantflow/internal/repository"
 	"github.com/2SSK/tenantflow/internal/temporal"
 	tfworkflow "github.com/2SSK/tenantflow/internal/workflow"
@@ -24,9 +25,10 @@ type activityRegistration struct {
 	name string
 }
 
-func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, auditRepo repository.AuditRepository, provider cloud.CloudProvider, log *slog.Logger) *Worker {
+func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, auditRepo repository.AuditRepository, provider cloud.CloudProvider, identityProvider identity.IdentityProvider, log *slog.Logger) *Worker {
 	provision := activities.NewProvisionActivities(repo, auditRepo, provider)
 	deprovision := activities.NewDeprovisionActivities(repo, auditRepo)
+	identityActs := activities.NewIdentityActivities(identityProvider)
 
 	sdk := sdkworker.New(tc.Client, tfworkflow.TaskQueue, sdkworker.Options{})
 
@@ -41,6 +43,8 @@ func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, auditRe
 		{fn: provision.MarkTenantActive, name: activities.MarkTenantActiveActivityName},
 		{fn: provision.MarkTenantFailed, name: activities.MarkTenantFailedActivityName},
 		{fn: provision.DropTenantDatabase, name: activities.DropTenantDatabaseActivityName},
+		{fn: identityActs.ProvisionTenantIdentity, name: activities.ProvisionTenantIdentityActivityName},
+		{fn: identityActs.DeleteTenantIdentity, name: activities.DeleteTenantIdentityActivityName},
 		{fn: deprovision.MarkTenantDeleting, name: activities.MarkTenantDeletingActivityName},
 		{fn: deprovision.DeprovisionTenant, name: activities.DeprovisionTenantActivityName},
 		{fn: deprovision.MarkTenantDeleted, name: activities.MarkTenantDeletedActivityName},

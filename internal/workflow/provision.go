@@ -30,31 +30,45 @@ func ProvisionTenantWorkflow(ctx workflow.Context, in ProvisionInput) (err error
 		},
 	})
 
-	// persist the tenant row as "provisioning" so the API
-	// can report progress immediately.
+	var userID string
+	var dbCreated bool
+
+	defer func() {
+		if err != nil {
+			if userID != "" {
+				dropIdentityErr := workflow.ExecuteActivity(actCtx, activities.DeleteTenantIdentityActivityName, userID).Get(actCtx, nil)
+				err = errors.Join(err, dropIdentityErr)
+			}
+			if dbCreated {
+				dropDBErr := workflow.ExecuteActivity(actCtx, activities.DropTenantDatabaseActivityName, in.TenantID).Get(actCtx, nil)
+				err = errors.Join(err, dropDBErr)
+			}
+			failErr := workflow.ExecuteActivity(actCtx, activities.MarkTenantFailedActivityName, in.TenantID).Get(actCtx, nil)
+			err = errors.Join(err, failErr)
+		}
+	}()
+
 	if err = workflow.ExecuteActivity(actCtx, activities.CreateTenantRecordActivityName, in.TenantID, workflowID).Get(actCtx, nil); err != nil {
 		return err
 	}
 
-	defer func() {
-		if err != nil {
-			dropErr := workflow.ExecuteActivity(actCtx, activities.DropTenantDatabaseActivityName, in.TenantID).Get(actCtx, nil)
-			failErr := workflow.ExecuteActivity(actCtx, activities.MarkTenantFailedActivityName, in.TenantID).Get(actCtx, nil)
-			err = errors.Join(err, dropErr, failErr)
-		}
-	}()
-
-	// do the real provisioning work
-	if err = workflow.ExecuteActivity(actCtx, activities.ProvisionTenantActivityName, in.TenantID).Get(actCtx, nil); err != nil {
+	if err = workflow.ExecuteActivity(actCtx, activities.CreateTenantRecordActivityName, in.TenantID, workflowID).Get(actCtx, nil); err != nil {
 		return err
 	}
 
-	// flip the tenant to "active"
+	if err = workflow.ExecuteActivity(actCtx, activities.ProvisionTenantActivityName, in.TenantID).Get(actCtx, nil); err != nil {
+		return err
+	}
+	dbCreated = true
+
+	if err = workflow.ExecuteActivity(actCtx, activities.ProvisionTenantIdentityActivityName, in.TenantID).Get(actCtx, &userID); err != nil {
+		return err
+	}
+
 	if err = workflow.ExecuteActivity(actCtx, activities.MarkTenantActiveActivityName, in.TenantID).Get(actCtx, nil); err != nil {
 		return err
 	}
 
 	logger.Info("provision workflow completed", "tenantID", in.TenantID)
-
 	return nil
 }
