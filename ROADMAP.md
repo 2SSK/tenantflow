@@ -738,7 +738,7 @@ Next.js app in `web/`:
 | #   | Task                                 | Status |
 | --- | ------------------------------------ | ------ |
 | 4.1 | Provision activities + compensations | ☑      |
-| 4.2 | Identity activities (gocloak)        | ☐      |
+| 4.2 | Identity activities (gocloak)        | ☑      |
 | 4.3 | `TenantProvisionWorkflow`            | ☑      |
 | 4.4 | Temporal client + worker             | ☑      |
 | 4.5 | Tenant API (POST/GET)                | ☑      |
