@@ -2,6 +2,7 @@
 
 import { useSession } from "next-auth/react";
 import { useEffect, useState } from "react";
+import Link from "next/link";
 
 type Tenant = {
   tenantID: string;
@@ -121,7 +122,11 @@ export default function TenantsPage() {
               )}
               {tenants.map((t) => (
                 <tr key={t.tenantID} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 font-mono text-xs">{t.tenantID}</td>
+                  <td className="px-4 py-3 font-mono text-xs">
+                    <Link href={`/dashboard/tenants/${t.tenantID}`} className="text-blue-600 hover:underline">
+                      {t.tenantID}
+                    </Link>
+                  </td>
                   <td className="px-4 py-3">
                     <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${statusColors[t.status] ?? "bg-gray-100"}`}>
                       {t.status}
