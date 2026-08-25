@@ -19,9 +19,22 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   callbacks: {
     async jwt({ token, account, profile }) {
       if (account && profile) {
-        const kcProfile = profile as Record<string, unknown>;
-        const realmAccess = kcProfile.realm_access as
-          { roles?: string[] } | undefined;
+        // Decode access token to get Keycloak realm_access roles
+        // (realm_access is NOT in the ID token / profile — only in the access token)
+        let realmRoles: string[] = [];
+        if (account.access_token) {
+          try {
+            const payload = JSON.parse(
+              Buffer.from(
+                account.access_token.split(".")[1],
+                "base64url",
+              ).toString(),
+            );
+            realmRoles = payload.realm_access?.roles ?? [];
+          } catch {
+            // Failed to decode — continue without roles
+          }
+        }
 
         return {
           ...token,
@@ -29,7 +42,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           userId: profile.sub ?? "",
           email: profile.email ?? "",
           name: profile.name ?? "",
-          realmRoles: realmAccess?.roles ?? [],
+          realmRoles,
         };
       }
       return token;
