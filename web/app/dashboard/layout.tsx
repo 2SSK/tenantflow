@@ -3,11 +3,43 @@
 import { useSession, signOut } from "next-auth/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useTheme } from "next-themes";
+import { useEffect, useState } from "react";
 
 const navItems = [
   { href: "/dashboard", label: "Overview" },
   { href: "/dashboard/tenants", label: "Tenants" },
 ];
+
+function ThemeToggle() {
+  const { theme, setTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => setMounted(true), []);
+
+  if (!mounted) {
+    return <div className="h-8 w-8" />;
+  }
+
+  return (
+    <button
+      onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+      className="flex h-8 w-8 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+      aria-label="Toggle theme"
+    >
+      {theme === "dark" ? (
+        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <circle cx="12" cy="12" r="5" />
+          <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
+        </svg>
+      ) : (
+        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+        </svg>
+      )}
+    </button>
+  );
+}
 
 export default function DashboardLayout({
   children,
@@ -21,14 +53,15 @@ export default function DashboardLayout({
   const isAdmin = user?.realmRoles?.includes("platform-admin") ?? false;
 
   return (
-    <div className="flex h-full bg-zinc-50 dark:bg-zinc-900">
+    <div className="flex h-full bg-background">
       {/* Sidebar */}
-      <aside className="flex w-64 flex-col border-r border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+      <aside className="flex w-64 flex-col border-r border-sidebar-border bg-sidebar">
         {/* Logo */}
-        <div className="flex h-14 items-center border-b border-zinc-200 px-4 dark:border-zinc-800">
-          <Link href="/dashboard" className="text-lg font-bold text-zinc-900 dark:text-zinc-50">
+        <div className="flex h-14 items-center justify-between border-b border-sidebar-border px-4">
+          <Link href="/dashboard" className="text-lg font-bold text-sidebar-primary">
             TenantFlow
           </Link>
+          <ThemeToggle />
         </div>
 
         {/* Navigation */}
@@ -45,8 +78,8 @@ export default function DashboardLayout({
                 href={item.href}
                 className={`flex items-center rounded-md px-3 py-2 text-sm font-medium transition-colors ${
                   isActive
-                    ? "bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400"
-                    : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
+                    ? "bg-sidebar-primary text-sidebar-primary-foreground"
+                    : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                 }`}
               >
                 {item.label}
@@ -57,16 +90,16 @@ export default function DashboardLayout({
           {/* Show admin-only links */}
           {isAdmin && (
             <>
-              <div className="my-2 border-t border-zinc-200 dark:border-zinc-800" />
-              <p className="px-3 py-1 text-xs font-semibold uppercase text-zinc-400 dark:text-zinc-500">
+              <div className="my-2 border-t border-sidebar-border" />
+              <p className="px-3 py-1 text-xs font-semibold uppercase text-muted-foreground">
                 Admin
               </p>
               <Link
                 href="/dashboard/users"
                 className={`flex items-center rounded-md px-3 py-2 text-sm font-medium transition-colors ${
                   pathname.startsWith("/dashboard/users")
-                    ? "bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400"
-                    : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
+                    ? "bg-sidebar-primary text-sidebar-primary-foreground"
+                    : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                 }`}
               >
                 Users
@@ -76,23 +109,23 @@ export default function DashboardLayout({
         </nav>
 
         {/* User info at bottom of sidebar */}
-        <div className="border-t border-zinc-200 p-4 dark:border-zinc-800">
+        <div className="border-t border-sidebar-border p-4">
           <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-600 text-sm font-bold text-white">
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-sm font-bold text-primary-foreground">
               {user?.name?.[0] ?? user?.email?.[0] ?? "?"}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-50">
+              <p className="truncate text-sm font-medium text-sidebar-foreground">
                 {user?.name ?? "Unknown"}
               </p>
-              <p className="truncate text-xs text-zinc-500 dark:text-zinc-400">
+              <p className="truncate text-xs text-muted-foreground">
                 {user?.email ?? ""}
               </p>
             </div>
           </div>
           <button
             onClick={() => signOut({ callbackUrl: "/" })}
-            className="mt-3 w-full rounded-md px-3 py-1.5 text-sm text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-50 transition-colors"
+            className="mt-3 w-full rounded-md px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
           >
             Sign out
           </button>

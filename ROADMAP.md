@@ -7,7 +7,7 @@
 **Created:** 2026-08-02
 **Updated:** 2026-08-17 (SAGA Compensations milestone complete — chaos hook, MarkTenantFailed activity, LIFO workflow, workflow tests)
 **Boilerplate:** https://github.com/2SSK/go-echo-boilerplate
-**Status:** Phase 0 + Phase 2 (partial) + Phase 4 (partial) — SAGA milestone committed
+**Status:** Phase 0–4 complete + Phase 5 partial (dashboard scaffold, auth, tenants list, users page, audit timeline)
 
 ---
 
@@ -641,13 +641,19 @@ Next.js app in `web/`:
 
 ### Phase 5 — Fullstack dashboard
 
-- [ ] Scaffold Next.js app in `web/` (TypeScript, strict)
-- [ ] Auth.js + Keycloak provider login
-- [ ] Tenants list page (calls GET /tenants with Bearer token)
-- [ ] Create tenant form (calls POST /tenants)
+- [x] Scaffold Next.js app in `web/` (TypeScript, strict)
+- [x] Auth.js + Keycloak provider login
+- [x] Tenants list page (calls GET /tenants with Bearer token)
+- [x] Create tenant form (calls POST /tenants)
 - [ ] Tenant detail page with SSE live progress (`/workflows/{id}/events`)
-- [ ] Audit timeline component
-- [ ] Role-aware UI (hide admin actions for non-admins)
+- [x] Audit timeline component
+- [x] Role-aware UI (hide admin actions for non-admins)
+- [x] Users page (list/delete/role management)
+- [ ] User create form
+- [ ] Tenant delete button
+- [ ] shadcn/ui + tokyonight color scheme
+- [ ] Dark/light mode toggle
+- [ ] JetBrains Mono + Inter fonts
 
 ### Phase 6 — Upgrade Saga + Shared isolation mode
 
@@ -751,13 +757,19 @@ Next.js app in `web/`:
 
 | #   | Task                     | Status |
 | --- | ------------------------ | ------ |
-| 5.1 | Next.js scaffold         | ☐      |
-| 5.2 | Keycloak login (Auth.js) | ☐      |
-| 5.3 | Tenants list             | ☐      |
-| 5.4 | Create tenant form       | ☐      |
+| 5.1 | Next.js scaffold         | ☑      |
+| 5.2 | Keycloak login (Auth.js) | ☑      |
+| 5.3 | Tenants list             | ☑      |
+| 5.4 | Create tenant form       | ☑      |
 | 5.5 | Live progress (SSE)      | ☐      |
-| 5.6 | Audit timeline           | ☐      |
-| 5.7 | Role-aware UI            | ☐      |
+| 5.6 | Audit timeline           | ☑      |
+| 5.7 | Role-aware UI            | ☑      |
+| 5.8 | Users page (list/delete) | ☑      |
+| 5.9 | User create form         | ☐      |
+| 5.10| Tenant delete button     | ☐      |
+| 5.11| shadcn/ui + tokyonight   | ☐      |
+| 5.12| Dark/light mode toggle   | ☐      |
+| 5.13| JetBrains Mono + Inter   | ☐      |
 
 ### Phase 6 — Upgrade + shared mode
 
