@@ -13,8 +13,9 @@ export async function GET() {
     const users = await listUsers();
     return NextResponse.json({ users });
   } catch (error) {
+    console.error("[users]", error);
     return NextResponse.json(
-      { error: "Failed to list users" },
+      { error: "Failed to list users", detail: String(error) },
       { status: 502 },
     );
   }

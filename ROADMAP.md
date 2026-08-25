@@ -767,9 +767,9 @@ Next.js app in `web/`:
 | 5.8 | Users page (list/delete) | ☑      |
 | 5.9 | User create form         | ☐      |
 | 5.10| Tenant delete button     | ☐      |
-| 5.11| shadcn/ui + tokyonight   | ☐      |
-| 5.12| Dark/light mode toggle   | ☐      |
-| 5.13| JetBrains Mono + Inter   | ☐      |
+| 5.11| shadcn/ui + tokyonight   | ☑      |
+| 5.12| Dark/light mode toggle   | ☑      |
+| 5.13| JetBrains Mono + Inter   | ☑      |
 
 ### Phase 6 — Upgrade + shared mode
 

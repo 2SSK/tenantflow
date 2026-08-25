@@ -1,20 +1,35 @@
 "use client";
 
-import { signIn } from "next-auth/react";
+import { signIn, useSession } from "next-auth/react";
+import { useRouter } from "next/navigation";
+import { useEffect } from "react";
 
 export default function Home() {
+  const { data: session } = useSession();
+  const router = useRouter();
+
+  // Redirect to dashboard if already logged in
+  useEffect(() => {
+    if (session) {
+      router.replace("/dashboard");
+    }
+  }, [session, router]);
+
   return (
-    <div className="flex flex-1 items-center justify-center bg-zinc-50 dark:bg-black">
-      <main className="flex flex-col items-center gap-8 px-8">
-        <h1 className="text-4xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
+    <div className="flex flex-1 items-center justify-center">
+      <main className="flex flex-col items-center gap-6 px-8">
+        <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary text-2xl font-bold text-primary-foreground">
+          T
+        </div>
+        <h1 className="text-3xl font-bold tracking-tight text-foreground">
           TenantFlow
         </h1>
-        <p className="text-lg text-zinc-600 dark:text-zinc-400">
-          Tenant management dashboard
+        <p className="text-muted-foreground">
+          Multi-tenant SaaS control plane
         </p>
         <button
-          onClick={() => signIn("keycloak")}
-          className="rounded-lg bg-blue-600 px-6 py-3 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 transition-colors"
+          onClick={() => signIn("keycloak", { callbackUrl: "/dashboard" })}
+          className="rounded-lg bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
         >
           Sign in with Keycloak
         </button>

@@ -14,11 +14,17 @@ func New(tc handler.WorkflowStarter, store handler.TenantStore, auditStore handl
 	// Public endpoints
 	root.HandleFunc("GET /status", handler.Status)
 
-	// All /api/* routes require authentication
+	tenants := handler.NewTenantHandler(tc, store, auditStore, log)
+
+	// Read-only API routes — no auth required
+	root.HandleFunc("GET /api/v1/tenants", tenants.ListTenants)
+	root.HandleFunc("GET /api/v1/tenants/{tenantID}", tenants.GetTenant)
+	root.HandleFunc("GET /api/v1/tenants/{tenantID}/events", tenants.ListEvents)
+
+	// Mutating API routes — require authentication + role
 	protected := http.NewServeMux()
-
-	registerTenantRoutes(protected, tc, store, auditStore, log)
-
+	protected.Handle("POST /api/v1/tenants", auth.RequireRole("platform-admin", http.HandlerFunc(tenants.CreateTenant)))
+	protected.Handle("DELETE /api/v1/tenants/{tenantID}", auth.RequireRole("platform-admin", http.HandlerFunc(tenants.DeleteTenant)))
 	root.Handle("/api/", auth.RequireAuth(authProvider, protected))
 
 	return root

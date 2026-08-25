@@ -3,23 +3,13 @@
 import { useSession } from "next-auth/react";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-
-type Tenant = {
-  tenantID: string;
-  status: string;
-  workflowID?: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-const statusColors: Record<string, string> = {
-  active: "bg-green-100 text-green-800",
-  provisioning: "bg-yellow-100 text-yellow-800",
-  pending: "bg-gray-100 text-gray-800",
-  failed: "bg-red-100 text-red-800",
-  deleting: "bg-orange-100 text-orange-800",
-  deleted: "bg-red-50 text-red-600",
-};
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
+import { TENANT_STATUS_CONFIG, type Tenant } from "@/lib/types";
+import { Plus, Loader2, Server } from "lucide-react";
 
 export default function TenantsPage() {
   const { data: session } = useSession();
@@ -28,6 +18,8 @@ export default function TenantsPage() {
   const [error, setError] = useState<string | null>(null);
   const [newTenantID, setNewTenantID] = useState("");
   const [creating, setCreating] = useState(false);
+
+  const isAdmin = session?.user?.realmRoles?.includes("platform-admin");
 
   const fetchTenants = async () => {
     setLoading(true);
@@ -71,77 +63,146 @@ export default function TenantsPage() {
     }
   };
 
-  const isAdmin = session?.user?.realmRoles?.includes("platform-admin");
+  // Group tenants by status
+  const activeCount = tenants.filter((t) => t.status === "active").length;
+  const provisioningCount = tenants.filter((t) => t.status === "provisioning").length;
+  const failedCount = tenants.filter((t) => t.status === "failed").length;
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">Tenants</h1>
+    <div className="flex h-full flex-col gap-4">
+      {/* ── Pinned header ── */}
+      <div className="shrink-0 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
+              <Server className="h-5 w-5 text-primary" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight">Tenants</h1>
+              <p className="text-sm text-muted-foreground">
+                Manage your SaaS tenants and their lifecycle.
+              </p>
+            </div>
+          </div>
+
+          {/* Quick stats */}
+          {!loading && tenants.length > 0 && (
+            <div className="hidden items-center gap-4 text-sm md:flex">
+              <div className="flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                <span className="text-muted-foreground">{activeCount} active</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-amber-500" />
+                <span className="text-muted-foreground">{provisioningCount} provisioning</span>
+              </div>
+              {failedCount > 0 && (
+                <div className="flex items-center gap-1.5">
+                  <span className="h-2 w-2 rounded-full bg-destructive" />
+                  <span className="text-muted-foreground">{failedCount} failed</span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Create form */}
+        {isAdmin && (
+          <Card>
+            <CardContent className="p-3">
+              <form onSubmit={handleCreate} className="flex items-center gap-2">
+                <span className="shrink-0 text-sm text-muted-foreground">New tenant</span>
+                <Input
+                  value={newTenantID}
+                  onChange={(e) => setNewTenantID(e.target.value)}
+                  placeholder="e.g. acme-corp"
+                  className="max-w-xs font-mono text-sm"
+                />
+                <Button
+                  type="submit"
+                  size="sm"
+                  disabled={creating || !newTenantID.trim()}
+                >
+                  {creating ? (
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Plus className="mr-1.5 h-3.5 w-3.5" />
+                  )}
+                  Create
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+        )}
+
+        <Separator />
       </div>
 
-      {isAdmin && (
-        <form onSubmit={handleCreate} className="mb-6 flex gap-2">
-          <input
-            type="text"
-            value={newTenantID}
-            onChange={(e) => setNewTenantID(e.target.value)}
-            placeholder="Tenant ID (e.g. acme-corp)"
-            className="border rounded px-3 py-2 text-sm flex-1 max-w-sm"
-          />
-          <button
-            type="submit"
-            disabled={creating || !newTenantID.trim()}
-            className="bg-blue-600 text-white px-4 py-2 rounded text-sm disabled:opacity-50"
-          >
-            {creating ? "Creating..." : "Create Tenant"}
-          </button>
-        </form>
+      {/* Status / error */}
+      {loading && (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Loading tenants...
+        </div>
+      )}
+      {error && (
+        <p className="text-sm text-destructive">{error}</p>
       )}
 
-      {loading && <p className="text-gray-500">Loading tenants...</p>}
-      {error && <p className="text-red-600">Error: {error}</p>}
-
+      {/* ── Scrollable table ── */}
       {!loading && !error && (
-        <div className="border rounded-lg overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 border-b">
-              <tr>
-                <th className="text-left px-4 py-3 font-medium">Tenant ID</th>
-                <th className="text-left px-4 py-3 font-medium">Status</th>
-                <th className="text-left px-4 py-3 font-medium">Created</th>
-                <th className="text-left px-4 py-3 font-medium">Updated</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {tenants.length === 0 && (
-                <tr>
-                  <td colSpan={4} className="px-4 py-8 text-center text-gray-400">
-                    No tenants yet. Create one above.
-                  </td>
+        <div className="min-h-0 flex-1 overflow-hidden rounded-xl">
+          <div className="h-full overflow-auto">
+            <table className="w-full caption-bottom text-sm">
+              <thead className="sticky top-0 z-10 border-b border-border bg-muted/50 backdrop-blur-sm">
+                <tr className="[&_th:last-child]:pr-4">
+                  <th className="h-10 px-4 text-left font-medium text-muted-foreground">Tenant ID</th>
+                  <th className="h-10 px-4 text-left font-medium text-muted-foreground">Status</th>
+                  <th className="h-10 px-4 text-left font-medium text-muted-foreground">Created</th>
+                  <th className="h-10 px-4 text-left font-medium text-muted-foreground">Updated</th>
                 </tr>
-              )}
-              {tenants.map((t) => (
-                <tr key={t.tenantID} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 font-mono text-xs">
-                    <Link href={`/dashboard/tenants/${t.tenantID}`} className="text-blue-600 hover:underline">
-                      {t.tenantID}
-                    </Link>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${statusColors[t.status] ?? "bg-gray-100"}`}>
-                      {t.status}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-gray-500">
-                    {new Date(t.createdAt).toLocaleString()}
-                  </td>
-                  <td className="px-4 py-3 text-gray-500">
-                    {new Date(t.updatedAt).toLocaleString()}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="[&_tr:last-child]:border-0">
+                {tenants.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="h-24 text-center text-muted-foreground">
+                      No tenants yet. Create one above.
+                    </td>
+                  </tr>
+                ) : (
+                  tenants.map((t) => {
+                    const config = TENANT_STATUS_CONFIG[t.status];
+                    return (
+                      <tr
+                        key={t.tenantID}
+                        className="border-b border-border transition-colors hover:bg-muted/30"
+                      >
+                        <td className="px-4 py-2.5">
+                          <Link
+                            href={`/dashboard/tenants/${t.tenantID}`}
+                            className="font-mono text-sm font-medium text-primary transition-colors hover:underline"
+                          >
+                            {t.tenantID}
+                          </Link>
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <Badge variant="outline" className={config?.className}>
+                            {config?.label ?? t.status}
+                          </Badge>
+                        </td>
+                        <td className="px-4 py-2.5 text-muted-foreground">
+                          {new Date(t.createdAt).toLocaleString()}
+                        </td>
+                        <td className="px-4 py-2.5 text-muted-foreground">
+                          {new Date(t.updatedAt).toLocaleString()}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>

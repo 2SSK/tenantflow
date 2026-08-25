@@ -3,43 +3,12 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-
-type Tenant = {
-  tenantID: string;
-  status: string;
-  workflowID?: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-type AuditEvent = {
-  ID: number;
-  TenantID: string;
-  WorkflowID?: string;
-  EventType: string;
-  Actor: string;
-  Payload: Record<string, unknown>;
-  CreatedAt: string;
-};
-
-const statusColors: Record<string, string> = {
-  active: "bg-green-100 text-green-800",
-  provisioning: "bg-yellow-100 text-yellow-800",
-  pending: "bg-gray-100 text-gray-800",
-  failed: "bg-red-100 text-red-800",
-  deleting: "bg-orange-100 text-orange-800",
-  deleted: "bg-red-50 text-red-600",
-};
-
-const eventIcons: Record<string, string> = {
-  TENANT_CREATED: "\u{1f7e2}",
-  TENANT_PROVISIONED: "\u{1f535}",
-  TENANT_ACTIVATED: "\u2705",
-  TENANT_FAILED: "\u{1f534}",
-  TENANT_DELETING: "\u{1f7e0}",
-  TENANT_DEPROVISIONED: "\u{1f535}",
-  TENANT_DELETED: "\u26ab",
-};
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
+import { TENANT_STATUS_CONFIG, AUDIT_EVENT_ICONS, type Tenant, type AuditEvent } from "@/lib/types";
+import { ArrowLeft, Loader2 } from "lucide-react";
 
 export default function TenantDetailPage() {
   const { tenantID } = useParams<{ tenantID: string }>();
@@ -71,85 +40,99 @@ export default function TenantDetailPage() {
     load();
   }, [tenantID]);
 
-  if (loading) return <p className="text-gray-500">Loading...</p>;
-  if (error) return <p className="text-red-600">Error: {error}</p>;
-  if (!tenant) return <p className="text-gray-500">Tenant not found</p>;
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Loading...
+      </div>
+    );
+  }
+
+  if (error) return <p className="text-sm text-destructive">{error}</p>;
+  if (!tenant) return <p className="text-sm text-muted-foreground">Tenant not found</p>;
+
+  const statusConfig = TENANT_STATUS_CONFIG[tenant.status];
 
   return (
-    <div>
-      <Link
-        href="/dashboard/tenants"
-        className="text-sm text-blue-600 hover:underline"
-      >
-        &larr; Back to tenants
+    <div className="space-y-6">
+      <Link href="/dashboard/tenants" className="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
+        <ArrowLeft className="h-4 w-4" />
+        Back to tenants
       </Link>
 
-      <div className="mt-4 mb-8">
+      {/* Header */}
+      <div>
         <div className="flex items-center gap-3">
           <h1 className="text-2xl font-bold font-mono">{tenant.tenantID}</h1>
-          <span
-            className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${statusColors[tenant.status] ?? "bg-gray-100"}`}
-          >
-            {tenant.status}
-          </span>
+          <Badge variant="outline" className={statusConfig?.className}>
+            {statusConfig?.label ?? tenant.status}
+          </Badge>
         </div>
-        <div className="mt-2 grid grid-cols-3 gap-4 text-sm text-gray-500">
+        <div className="mt-3 grid gap-4 text-sm sm:grid-cols-3">
           <div>
-            <span className="font-medium text-gray-700">Created:</span>{" "}
-            {new Date(tenant.createdAt).toLocaleString()}
+            <p className="text-muted-foreground">Created</p>
+            <p className="font-medium">{new Date(tenant.createdAt).toLocaleString()}</p>
           </div>
           <div>
-            <span className="font-medium text-gray-700">Updated:</span>{" "}
-            {new Date(tenant.updatedAt).toLocaleString()}
+            <p className="text-muted-foreground">Updated</p>
+            <p className="font-medium">{new Date(tenant.updatedAt).toLocaleString()}</p>
           </div>
           {tenant.workflowID && (
             <div>
-              <span className="font-medium text-gray-700">Workflow:</span>{" "}
-              <span className="font-mono text-xs">{tenant.workflowID}</span>
+              <p className="text-muted-foreground">Workflow</p>
+              <p className="font-mono text-xs">{tenant.workflowID}</p>
             </div>
           )}
         </div>
       </div>
 
-      <h2 className="text-lg font-semibold mb-4">Audit Events</h2>
-      {events.length === 0 ? (
-        <p className="text-gray-400">No events recorded yet.</p>
-      ) : (
-        <div className="relative border-l-2 border-gray-200 ml-3 space-y-4">
-          {events.map((event) => (
-            <div key={event.ID} className="relative pl-6">
-              <div className="absolute -left-2.5 top-1 w-4 h-4 rounded-full bg-white border-2 border-gray-300 flex items-center justify-center text-[10px]">
-                {eventIcons[event.EventType] ?? "\u2022"}
-              </div>
-              <div className="bg-white border rounded-lg p-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">
-                    {event.EventType}
-                  </span>
-                  <span className="text-xs text-gray-400">
-                    {new Date(event.CreatedAt).toLocaleString()}
-                  </span>
+      <Separator />
+
+      {/* Audit Events Timeline */}
+      <div>
+        <h2 className="text-lg font-semibold mb-4">Audit Events</h2>
+        {events.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No events recorded yet.</p>
+        ) : (
+          <div className="relative ml-3 space-y-4 border-l-2 border-border pl-6">
+            {events.map((event) => (
+              <div key={event.ID} className="relative">
+                {/* Timeline dot */}
+                <div className="absolute -left-[31px] top-1 flex h-4 w-4 items-center justify-center rounded-full border-2 border-border bg-background text-[10px]">
+                  {AUDIT_EVENT_ICONS[event.EventType] ?? "\u2022"}
                 </div>
-                <p className="text-xs text-gray-500 mt-1">
-                  Actor:{" "}
-                  <span className="font-mono">{event.Actor}</span>
-                </p>
-                {event.WorkflowID && (
-                  <p className="text-xs text-gray-500">
-                    Workflow:{" "}
-                    <span className="font-mono">{event.WorkflowID}</span>
-                  </p>
-                )}
-                {Object.keys(event.Payload).length > 0 && (
-                  <pre className="mt-2 text-xs bg-gray-50 rounded p-2 overflow-x-auto">
-                    {JSON.stringify(event.Payload, null, 2)}
-                  </pre>
-                )}
+
+                <Card>
+                  <CardContent className="p-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium">
+                        {event.EventType}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {new Date(event.CreatedAt).toLocaleString()}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Actor: <span className="font-mono">{event.Actor}</span>
+                    </p>
+                    {event.WorkflowID && (
+                      <p className="text-xs text-muted-foreground">
+                        Workflow: <span className="font-mono">{event.WorkflowID}</span>
+                      </p>
+                    )}
+                    {Object.keys(event.Payload).length > 0 && (
+                      <pre className="mt-2 rounded-md bg-muted p-2 text-xs overflow-x-auto font-mono">
+                        {JSON.stringify(event.Payload, null, 2)}
+                      </pre>
+                    )}
+                  </CardContent>
+                </Card>
               </div>
-            </div>
-          ))}
-        </div>
-      )}
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
