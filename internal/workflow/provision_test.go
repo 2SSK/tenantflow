@@ -16,12 +16,14 @@ func TestProvisionWorkflow_SuccessDoesNotCompensate(t *testing.T) {
 	env := ts.NewTestWorkflowEnvironment()
 
 	env.RegisterActivity(activities.NewProvisionActivities(nil, nil, nil))
+	env.RegisterActivity(activities.NewIdentityActivities(nil))
 
-	env.OnActivity(activities.CreateTenantRecordActivityName, mock.Anything, "acme-ok", mock.Anything).Return(nil)
-	env.OnActivity(activities.ProvisionTenantActivityName, mock.Anything, "acme-ok").Return(nil)
+	env.OnActivity(activities.CreateTenantRecordActivityName, mock.Anything, "acme-ok", mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(activities.ProvisionTenantActivityName, mock.Anything, "acme-ok", mock.Anything).Return(nil)
+	env.OnActivity(activities.ProvisionTenantIdentityActivityName, mock.Anything, "acme-ok").Return("kc-client-id", nil)
 	env.OnActivity(activities.MarkTenantActiveActivityName, mock.Anything, "acme-ok").Return(nil)
 
-	env.ExecuteWorkflow(ProvisionTenantWorkflow, ProvisionInput{TenantID: "acme-ok"})
+	env.ExecuteWorkflow(ProvisionTenantWorkflow, ProvisionInput{TenantID: "acme-ok", IsolationMode: "dedicated"})
 
 	if !env.IsWorkflowCompleted() {
 		t.Fatal("workflow did not complete")
@@ -38,12 +40,15 @@ func TestProvisionWorkflow_FailureCompensates(t *testing.T) {
 	env := ts.NewTestWorkflowEnvironment()
 
 	env.RegisterActivity(activities.NewProvisionActivities(nil, nil, nil))
+	env.RegisterActivity(activities.NewIdentityActivities(nil))
 
-	env.OnActivity(activities.CreateTenantRecordActivityName, mock.Anything, "fail-tenant", mock.Anything).Return(nil)
-	env.OnActivity(activities.ProvisionTenantActivityName, mock.Anything, "fail-tenant").Return(fmt.Errorf("simulated provisioning failure"))
+	env.OnActivity(activities.CreateTenantRecordActivityName, mock.Anything, "fail-tenant", mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(activities.ProvisionTenantActivityName, mock.Anything, "fail-tenant", mock.Anything).Return(fmt.Errorf("simulated provisioning failure"))
+	env.OnActivity(activities.DropTenantDatabaseActivityName, mock.Anything, "fail-tenant").Return(nil)
 	env.OnActivity(activities.MarkTenantFailedActivityName, mock.Anything, "fail-tenant").Return(nil)
 	env.ExecuteWorkflow(ProvisionTenantWorkflow, ProvisionInput{
-		TenantID: "fail-tenant",
+		TenantID:      "fail-tenant",
+		IsolationMode: "dedicated",
 	})
 
 	if !env.IsWorkflowCompleted() {

@@ -13,7 +13,8 @@ import (
 const TaskQueue = "tenantflow-provision"
 
 type ProvisionInput struct {
-	TenantID string
+	TenantID      string
+	IsolationMode string
 }
 
 func ProvisionTenantWorkflow(ctx workflow.Context, in ProvisionInput) (err error) {
@@ -48,15 +49,11 @@ func ProvisionTenantWorkflow(ctx workflow.Context, in ProvisionInput) (err error
 		}
 	}()
 
-	if err = workflow.ExecuteActivity(actCtx, activities.CreateTenantRecordActivityName, in.TenantID, workflowID).Get(actCtx, nil); err != nil {
+	if err = workflow.ExecuteActivity(actCtx, activities.CreateTenantRecordActivityName, in.TenantID, workflowID, in.IsolationMode).Get(actCtx, nil); err != nil {
 		return err
 	}
 
-	if err = workflow.ExecuteActivity(actCtx, activities.CreateTenantRecordActivityName, in.TenantID, workflowID).Get(actCtx, nil); err != nil {
-		return err
-	}
-
-	if err = workflow.ExecuteActivity(actCtx, activities.ProvisionTenantActivityName, in.TenantID).Get(actCtx, nil); err != nil {
+	if err = workflow.ExecuteActivity(actCtx, activities.ProvisionTenantActivityName, in.TenantID, in.IsolationMode).Get(actCtx, nil); err != nil {
 		return err
 	}
 	dbCreated = true

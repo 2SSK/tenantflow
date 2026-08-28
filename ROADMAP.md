@@ -775,7 +775,7 @@ Next.js app in `web/`:
 
 | #   | Task                             | Status |
 | --- | -------------------------------- | ------ |
-| 6.1 | Shared-schema migration          | ☐      |
+| 6.1 | Shared-schema migration          | ☑      |
 | 6.2 | Shared isolation tenant creation | ☐      |
 | 6.3 | Upgrade workflow + compensation  | ☐      |
 | 6.4 | Upgrade endpoint + UI            | ☐      |

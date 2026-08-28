@@ -13,10 +13,18 @@ const (
 	TenantStatusDeleted      TenantStatus = "deleted"
 )
 
+type IsolationMode string
+
+const (
+	IsolationModeDedicated IsolationMode = "dedicated"
+	IsolationModeShared    IsolationMode = "shared"
+)
+
 type Tenant struct {
-	TenantID   string
-	Status     TenantStatus
-	WorkflowID *string
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	TenantID      string
+	Status        TenantStatus
+	IsolationMode IsolationMode
+	WorkflowID    *string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }

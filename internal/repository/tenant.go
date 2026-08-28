@@ -29,20 +29,20 @@ func NewPostgresTenantRepository(pool *pgxpool.Pool) *PostgresTenantRepository {
 
 func (r *PostgresTenantRepository) CreateTenant(ctx context.Context, t *model.Tenant) error {
 	_, err := r.pool.Exec(ctx, `
-	INSERT INTO tenants (tenant_id, status, workflow_id)
-	VALUES ($1, $2, $3)
+	INSERT INTO tenants (tenant_id, status, workflow_id, isolation_mode)
+	VALUES ($1, $2, $3, $4)
 	ON CONFLICT (tenant_id) DO NOTHING`,
-		t.TenantID, t.Status, t.WorkflowID)
+		t.TenantID, t.Status, t.WorkflowID, t.IsolationMode)
 	return err
 }
 
 func (r *PostgresTenantRepository) GetTenant(ctx context.Context, tenantID string) (*model.Tenant, error) {
 	t := &model.Tenant{}
 	err := r.pool.QueryRow(ctx, `
-	SELECT tenant_id, status, workflow_id, created_at, updated_at
+	SELECT tenant_id, status, workflow_id, isolation_mode, created_at, updated_at
 	FROM tenants
 	WHERE tenant_id = $1`,
-		tenantID).Scan(&t.TenantID, &t.Status, &t.WorkflowID, &t.CreatedAt, &t.UpdatedAt)
+		tenantID).Scan(&t.TenantID, &t.Status, &t.WorkflowID, &t.IsolationMode, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
@@ -63,7 +63,7 @@ func (r *PostgresTenantRepository) UpdateTenantStatus(ctx context.Context, tenan
 
 func (r *PostgresTenantRepository) ListTenants(ctx context.Context) ([]model.Tenant, error) {
 	rows, err := r.pool.Query(ctx, `
-	SELECT tenant_id, status, workflow_id, created_at, updated_at
+	SELECT tenant_id, status, workflow_id, isolation_mode, created_at, updated_at
 	FROM tenants
 	ORDER BY created_at DESC`)
 	if err != nil {
@@ -74,7 +74,7 @@ func (r *PostgresTenantRepository) ListTenants(ctx context.Context) ([]model.Ten
 	tenants := make([]model.Tenant, 0)
 	for rows.Next() {
 		var t model.Tenant
-		if err := rows.Scan(&t.TenantID, &t.Status, &t.WorkflowID, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		if err := rows.Scan(&t.TenantID, &t.Status, &t.WorkflowID, &t.IsolationMode, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			return nil, err
 		}
 		tenants = append(tenants, t)

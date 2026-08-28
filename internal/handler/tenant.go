@@ -50,7 +50,8 @@ func NewTenantHandler(tc WorkflowStarter, store TenantStore, auditStore AuditSto
 
 // CreateTenantRequest is the POST /api/v1/tenants body
 type CreateTenantRequest struct {
-	TenantID string `json:"tenantID"`
+	TenantID      string `json:"tenantID"`
+	IsolationMode string `json:"isolationMode"`
 }
 
 // CreateTenantResponse is returned with HTTP 202 Accepted.
@@ -62,11 +63,12 @@ type CreateTenantResponse struct {
 
 // TenantResponse is the DTO returned by GET /api/v1/tenants/{tenantID}
 type TenantResponse struct {
-	TenantID   string    `json:"tenantID"`
-	Status     string    `json:"status"`
-	WorkflowID string    `json:"workflowID,omitempty"`
-	CreatedAt  time.Time `json:"createdAt"`
-	UpdatedAt  time.Time `json:"updatedAt"`
+	TenantID      string    `json:"tenantID"`
+	Status        string    `json:"status"`
+	IsolationMode string    `json:"isolationMode"`
+	WorkflowID    string    `json:"workflowID,omitempty"`
+	CreatedAt     time.Time `json:"createdAt"`
+	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
 // DeleteTenantResponse is returned with HTTP 202 Accepted.
@@ -93,6 +95,16 @@ func (h *TenantHandler) CreateTenant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Default to dedicated; validate that the value is one of the known modes.
+	isolationMode := req.IsolationMode
+	if isolationMode == "" {
+		isolationMode = string(model.IsolationModeDedicated)
+	}
+	if isolationMode != string(model.IsolationModeDedicated) && isolationMode != string(model.IsolationModeShared) {
+		writeError(w, http.StatusBadRequest, "isolationMode must be 'dedicated' or 'shared'")
+		return
+	}
+
 	workflowID := "provision-" + req.TenantID
 
 	run, err := h.temporal.ExecuteWorkflow(r.Context(), client.StartWorkflowOptions{
@@ -101,7 +113,8 @@ func (h *TenantHandler) CreateTenant(w http.ResponseWriter, r *http.Request) {
 		WorkflowIDReusePolicy:                    enums.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
 		WorkflowExecutionErrorWhenAlreadyStarted: true,
 	}, tfworkflow.ProvisionTenantWorkflow, tfworkflow.ProvisionInput{
-		TenantID: req.TenantID,
+		TenantID:      req.TenantID,
+		IsolationMode: isolationMode,
 	})
 	if err != nil {
 		var already *serviceerror.WorkflowExecutionAlreadyStarted
@@ -145,10 +158,11 @@ func (h *TenantHandler) GetTenant(w http.ResponseWriter, r *http.Request) {
 // toTenantResponse converts the storage model into the API response shape.
 func toTenantResponse(t *model.Tenant) TenantResponse {
 	resp := TenantResponse{
-		TenantID:  t.TenantID,
-		Status:    string(t.Status),
-		CreatedAt: t.CreatedAt,
-		UpdatedAt: t.UpdatedAt,
+		TenantID:      t.TenantID,
+		Status:        string(t.Status),
+		IsolationMode: string(t.IsolationMode),
+		CreatedAt:     t.CreatedAt,
+		UpdatedAt:     t.UpdatedAt,
 	}
 
 	if t.WorkflowID != nil {

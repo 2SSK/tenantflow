@@ -3,6 +3,7 @@
 export type Tenant = {
   tenantID: string;
   status: string;
+  isolationMode: string;
   workflowID?: string;
   createdAt: string;
   updatedAt: string;
