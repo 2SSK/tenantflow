@@ -1,5 +1,16 @@
 /** Shared types used across the dashboard */
 
+import type { LucideIcon } from "lucide-react";
+import {
+  CircleDot,
+  Database,
+  CheckCircle2,
+  ServerCrash,
+  RotateCcw,
+  CircleCheck,
+  Trash2,
+} from "lucide-react";
+
 export type Tenant = {
   tenantID: string;
   status: string;
@@ -59,12 +70,13 @@ export const TENANT_STATUS_CONFIG: Record<
   },
 };
 
-export const AUDIT_EVENT_ICONS: Record<string, string> = {
-  TENANT_CREATED: "\u{1f7e2}",
-  TENANT_PROVISIONED: "\u{1f535}",
-  TENANT_ACTIVATED: "\u2705",
-  TENANT_FAILED: "\u{1f534}",
-  TENANT_DELETING: "\u{1f7e0}",
-  TENANT_DEPROVISIONED: "\u{1f535}",
-  TENANT_DELETED: "\u26ab",
+// Icon shown on the audit timeline dot, keyed by event type.
+export const AUDIT_EVENT_ICONS: Record<string, LucideIcon> = {
+  TENANT_CREATED: CircleDot,
+  TENANT_PROVISIONED: Database,
+  TENANT_ACTIVATED: CheckCircle2,
+  TENANT_FAILED: ServerCrash,
+  TENANT_DELETING: RotateCcw,
+  TENANT_DEPROVISIONED: CircleCheck,
+  TENANT_DELETED: Trash2,
 };

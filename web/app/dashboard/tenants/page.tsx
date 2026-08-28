@@ -17,6 +17,7 @@ export default function TenantsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [newTenantID, setNewTenantID] = useState("");
+  const [isolationMode, setIsolationMode] = useState<"dedicated" | "shared">("dedicated");
   const [creating, setCreating] = useState(false);
 
   const isAdmin = session?.user?.realmRoles?.includes("platform-admin");
@@ -48,7 +49,10 @@ export default function TenantsPage() {
       const res = await fetch("/api/tenants", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tenantID: newTenantID.trim() }),
+        body: JSON.stringify({
+          tenantID: newTenantID.trim(),
+          isolationMode,
+        }),
       });
       if (!res.ok) {
         const body = await res.json();
@@ -118,6 +122,30 @@ export default function TenantsPage() {
                   placeholder="e.g. acme-corp"
                   className="max-w-xs font-mono text-sm"
                 />
+                <div className="flex items-center gap-1 rounded-lg border border-border bg-muted/40 p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setIsolationMode("dedicated")}
+                    className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                      isolationMode === "dedicated"
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    Dedicated
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsolationMode("shared")}
+                    className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                      isolationMode === "shared"
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    Shared
+                  </button>
+                </div>
                 <Button
                   type="submit"
                   size="sm"
@@ -158,6 +186,7 @@ export default function TenantsPage() {
                 <tr className="[&_th:last-child]:pr-4">
                   <th className="h-10 px-4 text-left font-medium text-muted-foreground">Tenant ID</th>
                   <th className="h-10 px-4 text-left font-medium text-muted-foreground">Status</th>
+                  <th className="h-10 px-4 text-left font-medium text-muted-foreground">Isolation</th>
                   <th className="h-10 px-4 text-left font-medium text-muted-foreground">Created</th>
                   <th className="h-10 px-4 text-left font-medium text-muted-foreground">Updated</th>
                 </tr>
@@ -165,7 +194,7 @@ export default function TenantsPage() {
               <tbody className="[&_tr:last-child]:border-0">
                 {tenants.length === 0 ? (
                   <tr>
-                    <td colSpan={4} className="h-24 text-center text-muted-foreground">
+                    <td colSpan={5} className="h-24 text-center text-muted-foreground">
                       No tenants yet. Create one above.
                     </td>
                   </tr>
@@ -188,6 +217,18 @@ export default function TenantsPage() {
                         <td className="px-4 py-2.5">
                           <Badge variant="outline" className={config?.className}>
                             {config?.label ?? t.status}
+                          </Badge>
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <Badge
+                            variant="outline"
+                            className={
+                              t.isolationMode === "shared"
+                                ? "bg-violet-500/10 text-violet-500 border-violet-500/20"
+                                : "bg-sky-500/10 text-sky-500 border-sky-500/20"
+                            }
+                          >
+                            {t.isolationMode === "shared" ? "Shared" : "Dedicated"}
                           </Badge>
                         </td>
                         <td className="px-4 py-2.5 text-muted-foreground">

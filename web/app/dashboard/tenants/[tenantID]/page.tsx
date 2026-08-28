@@ -14,7 +14,7 @@ import {
   type Tenant,
   type AuditEvent,
 } from "@/lib/types";
-import { ArrowLeft, Loader2, Trash2 } from "lucide-react";
+import { ArrowLeft, Loader2, Trash2, Dot } from "lucide-react";
 
 export default function TenantDetailPage() {
   const { tenantID } = useParams<{ tenantID: string }>();
@@ -175,52 +175,67 @@ export default function TenantDetailPage() {
       <Separator />
 
       {/* ── Scrollable audit events ── */}
-      <div className="min-h-0 flex-1">
-        <h2 className="mb-4 text-lg font-semibold">Audit Events</h2>
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="mb-4 shrink-0">
+          <h2 className="text-lg font-semibold">Audit Events</h2>
+        </div>
         {events.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             No events recorded yet.
           </p>
         ) : (
-          <div className="relative ml-3 space-y-4 border-l-2 border-border pl-6">
-            {events.map((event) => (
-              <div key={event.ID} className="relative">
-                {/* Timeline dot */}
-                <div className="absolute -left-[31px] top-1 flex h-4 w-4 items-center justify-center rounded-full border-2 border-border bg-background text-[10px]">
-                  {AUDIT_EVENT_ICONS[event.EventType] ?? "\u2022"}
-                </div>
+          <div className="min-h-0 flex-1 overflow-auto pr-2">
+            <div className="relative ml-3 space-y-4 border-l-2 border-border pl-6">
+              {events.map((event) => (
+                <div key={event.ID} className="relative">
+                  {/* Timeline dot — icon centered on the vertical line.
+                      The line (2px border-l) sits at the container's left edge.
+                      Content starts 26px in (2px border + 24px pl-6). A 16px dot
+                      is centered on the line when its left edge is 33px back:
+                      26 + 16/2 = 34 ≈ 33 (accounting for the 2px border). */}
+                  <div className="absolute -left-[33px] top-1 flex h-4 w-4 items-center justify-center rounded-full border border-border bg-background text-primary">
+                    {(() => {
+                      const Icon = AUDIT_EVENT_ICONS[event.EventType];
+                      return Icon ? (
+                        <Icon className="h-2.5 w-2.5" />
+                      ) : (
+                        <Dot className="h-2.5 w-2.5" />
+                      );
+                    })()}
+                  </div>
 
-                <Card>
-                  <CardContent className="p-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium">
-                        {event.EventType}
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        {new Date(event.CreatedAt).toLocaleString()}
-                      </span>
-                    </div>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Actor:{" "}
-                      <span className="font-mono">{event.Actor}</span>
-                    </p>
-                    {event.WorkflowID && (
-                      <p className="text-xs text-muted-foreground">
-                        Workflow:{" "}
-                        <span className="font-mono">
-                          {event.WorkflowID}
+                  <Card>
+                    <CardContent className="p-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-medium">
+                          {event.EventType}
                         </span>
+                        <span className="text-xs text-muted-foreground">
+                          {new Date(event.CreatedAt).toLocaleString()}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Actor:{" "}
+                        <span className="font-mono">{event.Actor}</span>
                       </p>
-                    )}
-                    {Object.keys(event.Payload).length > 0 && (
-                      <pre className="mt-2 overflow-x-auto rounded-md bg-muted p-2 font-mono text-xs">
-                        {JSON.stringify(event.Payload, null, 2)}
-                      </pre>
-                    )}
-                  </CardContent>
-                </Card>
-              </div>
-            ))}
+                      {event.WorkflowID && (
+                        <p className="text-xs text-muted-foreground">
+                          Workflow:{" "}
+                          <span className="font-mono">
+                            {event.WorkflowID}
+                          </span>
+                        </p>
+                      )}
+                      {Object.keys(event.Payload).length > 0 && (
+                        <pre className="mt-2 overflow-x-auto rounded-md bg-muted p-2 font-mono text-xs">
+                          {JSON.stringify(event.Payload, null, 2)}
+                        </pre>
+                      )}
+                    </CardContent>
+                  </Card>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>

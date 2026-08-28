@@ -41,18 +41,20 @@ function ThemeToggle({ collapsed }: { collapsed: boolean }) {
 
   if (collapsed) {
     return (
-      <Tooltip>
-        <TooltipTrigger
-          render={<Button variant="ghost" size="icon" className="h-8 w-8" onClick={toggle} />}
-        >
-          {theme === "dark" ? (
-            <Sun className="h-4 w-4" />
-          ) : (
-            <Moon className="h-4 w-4" />
-          )}
-        </TooltipTrigger>
-        <TooltipContent side="right">Toggle theme</TooltipContent>
-      </Tooltip>
+      <div className="flex justify-center">
+        <Tooltip>
+          <TooltipTrigger
+            render={<Button variant="ghost" size="icon" className="h-8 w-8" onClick={toggle} />}
+          >
+            {theme === "dark" ? (
+              <Sun className="h-4 w-4" />
+            ) : (
+              <Moon className="h-4 w-4" />
+            )}
+          </TooltipTrigger>
+          <TooltipContent side="right">Toggle theme</TooltipContent>
+        </Tooltip>
+      </div>
     );
   }
 
@@ -255,21 +257,23 @@ export default function DashboardLayout({
 
             {/* Sign out */}
             {collapsed ? (
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                      onClick={() => signOut({ callbackUrl: "/" })}
-                    />
-                  }
-                >
-                  <LogOut className="h-4 w-4" />
-                </TooltipTrigger>
-                <TooltipContent side="right">Sign out</TooltipContent>
-              </Tooltip>
+              <div className="flex justify-center">
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                        onClick={() => signOut({ callbackUrl: "/" })}
+                      />
+                    }
+                  >
+                    <LogOut className="h-4 w-4" />
+                  </TooltipTrigger>
+                  <TooltipContent side="right">Sign out</TooltipContent>
+                </Tooltip>
+              </div>
             ) : (
               <Button
                 variant="ghost"
