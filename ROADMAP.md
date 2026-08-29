@@ -777,8 +777,8 @@ Next.js app in `web/`:
 | --- | -------------------------------- | ------ |
 | 6.1 | Shared-schema migration          | ☑      |
 | 6.2 | Shared isolation tenant creation | ☑      |
-| 6.3 | Upgrade workflow + compensation  | ☐      |
-| 6.4 | Upgrade endpoint + UI            | ☐      |
+| 6.3 | Upgrade workflow + compensation  | ☑      |
+| 6.4 | Upgrade endpoint + UI            | ☑      |
 | 6.5 | Trade-off notes written          | ☐      |
 
 ### Phase 7 — Migrate/Backup/Restore/Delete
