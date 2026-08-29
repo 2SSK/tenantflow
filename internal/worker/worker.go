@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/2SSK/tenantflow/internal/activities"
+	"github.com/2SSK/tenantflow/internal/billing"
 	"github.com/2SSK/tenantflow/internal/cloud"
 	"github.com/2SSK/tenantflow/internal/identity"
 	"github.com/2SSK/tenantflow/internal/repository"
@@ -29,12 +30,15 @@ func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, auditRe
 	provision := activities.NewProvisionActivities(repo, auditRepo, provider)
 	deprovision := activities.NewDeprovisionActivities(repo, auditRepo)
 	identityActs := activities.NewIdentityActivities(identityProvider)
+	quotaStore := billing.NewInMemoryQuotaStore()
+	upgrade := activities.NewUpgradeActivities(repo, auditRepo, quotaStore)
 
 	sdk := sdkworker.New(tc.Client, tfworkflow.TaskQueue, sdkworker.Options{})
 
 	registerWorkflows(sdk, []any{
 		tfworkflow.ProvisionTenantWorkflow,
 		tfworkflow.DeprovisionTenantWorkflow,
+		tfworkflow.UpgradeTenantWorkflow,
 	})
 
 	registerActivities(sdk, []activityRegistration{
@@ -48,6 +52,14 @@ func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, auditRe
 		{fn: deprovision.MarkTenantDeleting, name: activities.MarkTenantDeletingActivityName},
 		{fn: deprovision.DeprovisionTenant, name: activities.DeprovisionTenantActivityName},
 		{fn: deprovision.MarkTenantDeleted, name: activities.MarkTenantDeletedActivityName},
+		{fn: upgrade.MarkTenantUpgrading, name: activities.MarkTenantUpgradingActivityName},
+		{fn: upgrade.VerifyTenantActive, name: activities.VerifyTenantActiveActivityName},
+		{fn: upgrade.RaiseQuotas, name: activities.RaiseQuotasActivityName},
+		{fn: upgrade.EnableFeatures, name: activities.EnableFeaturesActivityName},
+		{fn: upgrade.UpdateBilling, name: activities.UpdateBillingActivityName},
+		{fn: upgrade.RollbackQuotas, name: activities.RollbackQuotasActivityName},
+		{fn: upgrade.MarkTenantUpgraded, name: activities.MarkTenantUpgradedActivityName},
+		{fn: upgrade.MarkTenantUpgradeFailed, name: activities.MarkTenantUpgradeFailedActivityName},
 	})
 
 	return &Worker{log: log, sdk: sdk}

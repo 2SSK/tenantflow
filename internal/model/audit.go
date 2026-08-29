@@ -12,6 +12,10 @@ const (
 	AuditEventTenantDeleting      AuditEventType = "TENANT_DELETING"
 	AuditEventTenantDeprovisioned AuditEventType = "TENANT_DEPROVISIONED"
 	AuditEventTenantDeleted       AuditEventType = "TENANT_DELETED"
+	AuditEventTenantUpgrading     AuditEventType = "TENANT_UPGRADING"
+	AuditEventTenantUpgraded      AuditEventType = "TENANT_UPGRADED"
+	AuditEventTenantUpgradeFailed AuditEventType = "TENANT_UPGRADE_FAILED"
+	AuditEventTenantQuotaRolled   AuditEventType = "TENANT_QUOTA_ROLLED_BACK"
 )
 
 type AuditEvent struct {
