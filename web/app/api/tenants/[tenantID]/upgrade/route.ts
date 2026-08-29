@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, ApiFetchError } from "@/lib/api";
 
 // POST /api/tenants/:id/upgrade → upgrade tenant via Go API
 export async function POST(
@@ -24,10 +24,13 @@ export async function POST(
     );
     return NextResponse.json({ ok: true });
   } catch (err) {
+    // Forward the upstream status (e.g. 409 Conflict for an in-progress
+    // upgrade) and a real error message instead of a generic 502.
+    const status = err instanceof ApiFetchError ? err.status : 502;
     const message =
       err instanceof Error
         ? err.message
         : "Failed to upgrade tenant";
-    return NextResponse.json({ error: message }, { status: 502 });
+    return NextResponse.json({ error: message }, { status });
   }
 }
