@@ -30,21 +30,28 @@ type AuditStore interface {
 	ListEvents(ctx context.Context, tenantID string) ([]model.AuditEvent, error)
 }
 
+// BackupStore lists the control-plane records of tenant backups.
+type BackupStore interface {
+	ListBackups(ctx context.Context, tenantID string) ([]model.Backup, error)
+}
+
 // TenantHandler handles /api/v1/tenants endpoints.
 type TenantHandler struct {
-	temporal   WorkflowStarter
-	store      TenantStore
-	auditStore AuditStore
-	log        *slog.Logger
+	temporal    WorkflowStarter
+	store       TenantStore
+	auditStore  AuditStore
+	backupStore BackupStore
+	log         *slog.Logger
 }
 
 // NewTenantHandler wires a TenantHandler with its dependencies.
-func NewTenantHandler(tc WorkflowStarter, store TenantStore, auditStore AuditStore, log *slog.Logger) *TenantHandler {
+func NewTenantHandler(tc WorkflowStarter, store TenantStore, auditStore AuditStore, backupStore BackupStore, log *slog.Logger) *TenantHandler {
 	return &TenantHandler{
-		temporal:   tc,
-		store:      store,
-		auditStore: auditStore,
-		log:        log,
+		temporal:    tc,
+		store:       store,
+		auditStore:  auditStore,
+		backupStore: backupStore,
+		log:         log,
 	}
 }
 
@@ -85,9 +92,51 @@ type UpgradeTenantResponse struct {
 	Status     string `json:"status"`
 }
 
+// MigrateTenantResponse is returned with HTTP 202 Accepted.
+type MigrateTenantResponse struct {
+	TenantID   string `json:"tenantID"`
+	WorkflowID string `json:"workflowID"`
+	Status     string `json:"status"`
+}
+
+// BackupTenantResponse is returned with HTTP 202 Accepted.
+type BackupTenantResponse struct {
+	TenantID   string `json:"tenantID"`
+	WorkflowID string `json:"workflowID"`
+	Status     string `json:"status"`
+}
+
+// RestoreTenantRequest is the POST /api/v1/tenants/{tenantID}/restore body.
+type RestoreTenantRequest struct {
+	BackupID int64 `json:"backupID"`
+}
+
+// RestoreTenantResponse is returned with HTTP 202 Accepted.
+type RestoreTenantResponse struct {
+	TenantID   string `json:"tenantID"`
+	BackupID   int64  `json:"backupID"`
+	WorkflowID string `json:"workflowID"`
+	Status     string `json:"status"`
+}
+
 // ListTenantsResponse is returned by GET /api/v1/tenants
 type ListTenantsResponse struct {
 	Tenants []TenantResponse `json:"tenants"`
+}
+
+// BackupResponse is the DTO returned by GET /api/v1/tenants/{tenantID}/backups
+type BackupResponse struct {
+	ID          int64      `json:"id"`
+	TenantID    string     `json:"tenantID"`
+	Filename    string     `json:"filename"`
+	Status      string     `json:"status"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	CompletedAt *time.Time `json:"completedAt,omitempty"`
+}
+
+// ListBackupsResponse is returned by GET /api/v1/tenants/{tenantID}/backups
+type ListBackupsResponse struct {
+	Backups []BackupResponse `json:"backups"`
 }
 
 func (h *TenantHandler) CreateTenant(w http.ResponseWriter, r *http.Request) {
@@ -272,6 +321,168 @@ func (h *TenantHandler) UpgradeTenant(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// MigrateTenant handles POST /api/v1/tenants/{tenantID}/migrate
+func (h *TenantHandler) MigrateTenant(w http.ResponseWriter, r *http.Request) {
+	tenantID := r.PathValue("tenantID")
+
+	tenant, err := h.store.GetTenant(r.Context(), tenantID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "tenant not found")
+			return
+		}
+		h.log.Error("get tenant for migrate", "tenantID", tenantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get tenant")
+		return
+	}
+
+	// Only active tenants can be migrated (the saga keeps them active).
+	if tenant.Status != model.TenantStatusActive {
+		writeError(w, http.StatusConflict, "tenant must be active to migrate")
+		return
+	}
+
+	workflowID := "migrate-" + tenantID
+
+	run, err := h.temporal.ExecuteWorkflow(r.Context(), client.StartWorkflowOptions{
+		ID:                                       workflowID,
+		TaskQueue:                                tfworkflow.TaskQueue,
+		WorkflowIDReusePolicy:                    enums.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
+		WorkflowExecutionErrorWhenAlreadyStarted: true,
+	}, tfworkflow.MigrateTenantWorkflow, tfworkflow.MigrateInput{
+		TenantID: tenantID,
+	})
+	if err != nil {
+		var already *serviceerror.WorkflowExecutionAlreadyStarted
+		if errors.As(err, &already) {
+			writeError(w, http.StatusConflict, "migration already in progress for this tenant")
+			return
+		}
+		h.log.Error("start migrate workflow", "tenantID", tenantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to start migration workflow")
+		return
+	}
+
+	h.log.Info("migrate workflow started", "tenantID", tenantID, "workflowID", run.GetID())
+	writeJSON(w, http.StatusAccepted, MigrateTenantResponse{
+		TenantID:   tenantID,
+		WorkflowID: run.GetID(),
+		Status:     "migrating",
+	})
+}
+
+// BackupTenant handles POST /api/v1/tenants/{tenantID}/backup
+func (h *TenantHandler) BackupTenant(w http.ResponseWriter, r *http.Request) {
+	tenantID := r.PathValue("tenantID")
+
+	tenant, err := h.store.GetTenant(r.Context(), tenantID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "tenant not found")
+			return
+		}
+		h.log.Error("get tenant for backup", "tenantID", tenantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get tenant")
+		return
+	}
+
+	// Only active tenants can be backed up (a live, usable database).
+	if tenant.Status != model.TenantStatusActive {
+		writeError(w, http.StatusConflict, "tenant must be active to backup")
+		return
+	}
+
+	workflowID := "backup-" + tenantID
+
+	run, err := h.temporal.ExecuteWorkflow(r.Context(), client.StartWorkflowOptions{
+		ID:                                       workflowID,
+		TaskQueue:                                tfworkflow.TaskQueue,
+		WorkflowIDReusePolicy:                    enums.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
+		WorkflowExecutionErrorWhenAlreadyStarted: true,
+	}, tfworkflow.BackupTenantWorkflow, tfworkflow.BackupInput{
+		TenantID: tenantID,
+	})
+	if err != nil {
+		var already *serviceerror.WorkflowExecutionAlreadyStarted
+		if errors.As(err, &already) {
+			writeError(w, http.StatusConflict, "backup already in progress for this tenant")
+			return
+		}
+		h.log.Error("start backup workflow", "tenantID", tenantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to start backup workflow")
+		return
+	}
+
+	h.log.Info("backup workflow started", "tenantID", tenantID, "workflowID", run.GetID())
+	writeJSON(w, http.StatusAccepted, BackupTenantResponse{
+		TenantID:   tenantID,
+		WorkflowID: run.GetID(),
+		Status:     "backing-up",
+	})
+}
+
+// RestoreTenant handles POST /api/v1/tenants/{tenantID}/restore.
+func (h *TenantHandler) RestoreTenant(w http.ResponseWriter, r *http.Request) {
+	tenantID := r.PathValue("tenantID")
+
+	var req RestoreTenantRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.BackupID <= 0 {
+		writeError(w, http.StatusBadRequest, "backupID is required")
+		return
+	}
+
+	tenant, err := h.store.GetTenant(r.Context(), tenantID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "tenant not found")
+			return
+		}
+		h.log.Error("get tenant for restore", "tenantID", tenantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get tenant")
+		return
+	}
+
+	// Only active tenants can be restored (a live, usable database to overwrite).
+	if tenant.Status != model.TenantStatusActive {
+		writeError(w, http.StatusConflict, "tenant must be active to restore")
+		return
+	}
+
+	workflowID := "restore-" + tenantID
+
+	run, err := h.temporal.ExecuteWorkflow(r.Context(), client.StartWorkflowOptions{
+		ID:                                       workflowID,
+		TaskQueue:                                tfworkflow.TaskQueue,
+		WorkflowIDReusePolicy:                    enums.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
+		WorkflowExecutionErrorWhenAlreadyStarted: true,
+	}, tfworkflow.RestoreTenantWorkflow, tfworkflow.RestoreInput{
+		TenantID: tenantID,
+		BackupID: req.BackupID,
+	})
+	if err != nil {
+		var already *serviceerror.WorkflowExecutionAlreadyStarted
+		if errors.As(err, &already) {
+			writeError(w, http.StatusConflict, "restore already in progress for this tenant")
+			return
+		}
+		h.log.Error("start restore workflow", "tenantID", tenantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to start restore workflow")
+		return
+	}
+
+	h.log.Info("restore workflow started", "tenantID", tenantID, "backupID", req.BackupID, "workflowID", run.GetID())
+	writeJSON(w, http.StatusAccepted, RestoreTenantResponse{
+		TenantID:   tenantID,
+		BackupID:   req.BackupID,
+		WorkflowID: run.GetID(),
+		Status:     "restoring",
+	})
+}
+
 func (h *TenantHandler) ListTenants(w http.ResponseWriter, r *http.Request) {
 	tenants, err := h.store.ListTenants(r.Context())
 	if err != nil {
@@ -313,4 +524,40 @@ func (h *TenantHandler) ListEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"events": events})
+}
+
+// ListBackups handles GET /api/v1/tenants/{tenantID}/backups
+func (h *TenantHandler) ListBackups(w http.ResponseWriter, r *http.Request) {
+	tenantID := r.PathValue("tenantID")
+
+	if _, err := h.store.GetTenant(r.Context(), tenantID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "tenant not found")
+			return
+		}
+		h.log.Error("get tenant for backups", "tenantID", tenantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get tenant")
+		return
+	}
+
+	backups, err := h.backupStore.ListBackups(r.Context(), tenantID)
+	if err != nil {
+		h.log.Error("list backups", "tenantID", tenantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to list backups")
+		return
+	}
+
+	resp := ListBackupsResponse{Backups: make([]BackupResponse, 0, len(backups))}
+	for _, b := range backups {
+		resp.Backups = append(resp.Backups, BackupResponse{
+			ID:          b.ID,
+			TenantID:    b.TenantID,
+			Filename:    b.Filename,
+			Status:      string(b.Status),
+			CreatedAt:   b.CreatedAt,
+			CompletedAt: b.CompletedAt,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }

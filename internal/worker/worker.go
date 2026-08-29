@@ -26,12 +26,15 @@ type activityRegistration struct {
 	name string
 }
 
-func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, auditRepo repository.AuditRepository, provider cloud.CloudProvider, identityProvider identity.IdentityProvider, log *slog.Logger) *Worker {
+func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, auditRepo repository.AuditRepository, backupRepo repository.BackupRepository, provider cloud.CloudProvider, identityProvider identity.IdentityProvider, log *slog.Logger) *Worker {
 	provision := activities.NewProvisionActivities(repo, auditRepo, provider)
 	deprovision := activities.NewDeprovisionActivities(repo, auditRepo)
 	identityActs := activities.NewIdentityActivities(identityProvider)
 	quotaStore := billing.NewInMemoryQuotaStore()
 	upgrade := activities.NewUpgradeActivities(repo, auditRepo, quotaStore)
+	migrate := activities.NewMigrateActivities(auditRepo, provider)
+	backup := activities.NewBackupActivities(backupRepo, auditRepo, provider)
+	restore := activities.NewRestoreActivities(backupRepo, auditRepo, provider)
 
 	sdk := sdkworker.New(tc.Client, tfworkflow.TaskQueue, sdkworker.Options{})
 
@@ -39,6 +42,9 @@ func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, auditRe
 		tfworkflow.ProvisionTenantWorkflow,
 		tfworkflow.DeprovisionTenantWorkflow,
 		tfworkflow.UpgradeTenantWorkflow,
+		tfworkflow.MigrateTenantWorkflow,
+		tfworkflow.BackupTenantWorkflow,
+		tfworkflow.RestoreTenantWorkflow,
 	})
 
 	registerActivities(sdk, []activityRegistration{
@@ -60,6 +66,22 @@ func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, auditRe
 		{fn: upgrade.RollbackQuotas, name: activities.RollbackQuotasActivityName},
 		{fn: upgrade.MarkTenantUpgraded, name: activities.MarkTenantUpgradedActivityName},
 		{fn: upgrade.MarkTenantUpgradeFailed, name: activities.MarkTenantUpgradeFailedActivityName},
+		{fn: migrate.MarkTenantMigrating, name: activities.MarkTenantMigratingActivityName},
+		{fn: migrate.MigrateData, name: activities.MigrateDataActivityName},
+		{fn: migrate.SwitchTraffic, name: activities.SwitchTrafficActivityName},
+		{fn: migrate.MarkTenantMigrated, name: activities.MarkTenantMigratedActivityName},
+		{fn: migrate.DropTenantAuxDatabase, name: activities.DropTenantAuxDatabaseActivityName},
+		{fn: migrate.MarkTenantMigrateFailed, name: activities.MarkTenantMigrateFailedActivityName},
+		{fn: backup.MarkTenantBackingUp, name: activities.MarkTenantBackingUpActivityName},
+		{fn: backup.BackupTenantData, name: activities.BackupTenantDataActivityName},
+		{fn: backup.MarkTenantBackedUp, name: activities.MarkTenantBackedUpActivityName},
+		{fn: backup.MarkTenantBackupFailed, name: activities.MarkTenantBackupFailedActivityName},
+		{fn: restore.MarkTenantRestoring, name: activities.MarkTenantRestoringActivityName},
+		{fn: restore.PreRestoreSnapshot, name: activities.PreRestoreSnapshotActivityName},
+		{fn: restore.RestoreData, name: activities.RestoreDataActivityName},
+		{fn: restore.MarkTenantRestored, name: activities.MarkTenantRestoredActivityName},
+		{fn: restore.RestoreRollback, name: activities.RestoreRollbackActivityName},
+		{fn: restore.MarkTenantRestoreFailed, name: activities.MarkTenantRestoreFailedActivityName},
 	})
 
 	return &Worker{log: log, sdk: sdk}

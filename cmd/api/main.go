@@ -33,7 +33,7 @@ func run() error {
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", a.Config.HTTPPort),
-		Handler:           middleware.RequestLogger(a.Log, router.New(a.TC, a.Repo, a.AuditRepo, a.Auth, a.Log)),
+		Handler:           middleware.RequestLogger(a.Log, router.New(a.TC, a.Repo, a.AuditRepo, a.BackupRepo, a.Auth, a.Log)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

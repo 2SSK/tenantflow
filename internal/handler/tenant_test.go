@@ -35,6 +35,15 @@ type stubTenantStore struct {
 
 type stubAuditStore struct{}
 
+type stubBackupStore struct {
+	backups []model.Backup
+	err     error
+}
+
+func (s *stubBackupStore) ListBackups(ctx context.Context, tenantID string) ([]model.Backup, error) {
+	return s.backups, s.err
+}
+
 func (s *stubWorkflowStarter) ExecuteWorkflow(ctx context.Context, options client.StartWorkflowOptions, workflow any, args ...any) (client.WorkflowRun, error) {
 	s.startedOptions = options
 	s.startedArgs = args
@@ -63,7 +72,7 @@ func (s *stubTenantStore) ListTenants(ctx context.Context) ([]model.Tenant, erro
 }
 
 func newTestTenantHandler(s *stubWorkflowStarter, store TenantStore) *TenantHandler {
-	return NewTenantHandler(s, store, &stubAuditStore{}, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	return NewTenantHandler(s, store, &stubAuditStore{}, &stubBackupStore{}, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
 }
 
 func TestCreateTenatAccept(t *testing.T) {
@@ -394,6 +403,279 @@ func TestUpgradeTenant(t *testing.T) {
 	}
 }
 
+func TestMigrateTenant(t *testing.T) {
+	workflowID := "provision-acme"
+	active := &model.Tenant{
+		TenantID:   "acme",
+		Status:     model.TenantStatusActive,
+		WorkflowID: &workflowID,
+	}
+	provisioning := &model.Tenant{
+		TenantID: "acme",
+		Status:   model.TenantStatusProvisioning,
+	}
+
+	tests := []struct {
+		name       string
+		store      *stubTenantStore
+		starterErr error
+		wantStatus int
+		wantBody   string
+	}{
+		{
+			name:       "active tenant accepted",
+			store:      &stubTenantStore{tenant: active},
+			wantStatus: http.StatusAccepted,
+			wantBody:   `"workflowID":"migrate-acme","status":"migrating"`,
+		},
+		{
+			name:       "not found",
+			store:      &stubTenantStore{err: repository.ErrNotFound},
+			wantStatus: http.StatusNotFound,
+			wantBody:   `"error":"tenant not found"`,
+		},
+		{
+			name:       "non-active tenant conflicts",
+			store:      &stubTenantStore{tenant: provisioning},
+			wantStatus: http.StatusConflict,
+			wantBody:   `"error":"tenant must be active to migrate"`,
+		},
+		{
+			name:       "already migrating conflicts",
+			store:      &stubTenantStore{tenant: active},
+			starterErr: serviceerror.NewWorkflowExecutionAlreadyStarted("already started", "migrate-acme", "run-1"),
+			wantStatus: http.StatusConflict,
+			wantBody:   `"error":"migration already in progress for this tenant"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stub := &stubWorkflowStarter{err: tt.starterErr}
+			h := newTestTenantHandler(stub, tt.store)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/tenants/acme/migrate", nil)
+			req.SetPathValue("tenantID", "acme")
+			rec := httptest.NewRecorder()
+
+			h.MigrateTenant(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if tt.wantBody != "" && !strings.Contains(rec.Body.String(), tt.wantBody) {
+				t.Errorf("body = %q, want to contain %q", rec.Body.String(), tt.wantBody)
+			}
+		})
+	}
+}
+
 func (s *stubAuditStore) ListEvents(ctx context.Context, tenantID string) ([]model.AuditEvent, error) {
 	return nil, nil
+}
+
+func TestBackupTenant(t *testing.T) {
+	workflowID := "provision-acme"
+	active := &model.Tenant{
+		TenantID:   "acme",
+		Status:     model.TenantStatusActive,
+		WorkflowID: &workflowID,
+	}
+	provisioning := &model.Tenant{
+		TenantID: "acme",
+		Status:   model.TenantStatusProvisioning,
+	}
+
+	tests := []struct {
+		name       string
+		store      *stubTenantStore
+		starterErr error
+		wantStatus int
+		wantBody   string
+	}{
+		{
+			name:       "active tenant accepted",
+			store:      &stubTenantStore{tenant: active},
+			wantStatus: http.StatusAccepted,
+			wantBody:   `"workflowID":"backup-acme","status":"backing-up"`,
+		},
+		{
+			name:       "not found",
+			store:      &stubTenantStore{err: repository.ErrNotFound},
+			wantStatus: http.StatusNotFound,
+			wantBody:   `"error":"tenant not found"`,
+		},
+		{
+			name:       "non-active tenant conflicts",
+			store:      &stubTenantStore{tenant: provisioning},
+			wantStatus: http.StatusConflict,
+			wantBody:   `"error":"tenant must be active to backup"`,
+		},
+		{
+			name:       "already backing up conflicts",
+			store:      &stubTenantStore{tenant: active},
+			starterErr: serviceerror.NewWorkflowExecutionAlreadyStarted("already started", "backup-acme", "run-1"),
+			wantStatus: http.StatusConflict,
+			wantBody:   `"error":"backup already in progress for this tenant"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stub := &stubWorkflowStarter{err: tt.starterErr}
+			h := newTestTenantHandler(stub, tt.store)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/tenants/acme/backup", nil)
+			req.SetPathValue("tenantID", "acme")
+			rec := httptest.NewRecorder()
+
+			h.BackupTenant(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if tt.wantBody != "" && !strings.Contains(rec.Body.String(), tt.wantBody) {
+				t.Errorf("body = %q, want to contain %q", rec.Body.String(), tt.wantBody)
+			}
+		})
+	}
+}
+
+func TestListBackups(t *testing.T) {
+	done := time.Now()
+	backups := []model.Backup{
+		{ID: 1, TenantID: "acme", Filename: "acme_1.sql", Status: model.BackupStatusCompleted, CompletedAt: &done},
+		{ID: 2, TenantID: "acme", Filename: "acme_2.sql", Status: model.BackupStatusFailed},
+	}
+
+	tests := []struct {
+		name       string
+		store      *stubTenantStore
+		wantStatus int
+		wantBody   string
+	}{
+		{
+			name:       "lists backups",
+			store:      &stubTenantStore{tenant: &model.Tenant{TenantID: "acme", Status: model.TenantStatusActive}},
+			wantStatus: http.StatusOK,
+			wantBody:   `"filename":"acme_1.sql"`,
+		},
+		{
+			name:       "tenant not found",
+			store:      &stubTenantStore{err: repository.ErrNotFound},
+			wantStatus: http.StatusNotFound,
+			wantBody:   `"error":"tenant not found"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stub := &stubWorkflowStarter{}
+			bs := &stubBackupStore{backups: backups, err: tt.store.err}
+			h := NewTenantHandler(stub, tt.store, &stubAuditStore{}, bs, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants/acme/backups", nil)
+			req.SetPathValue("tenantID", "acme")
+			rec := httptest.NewRecorder()
+
+			h.ListBackups(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if tt.wantBody != "" && !strings.Contains(rec.Body.String(), tt.wantBody) {
+				t.Errorf("body = %q, want to contain %q", rec.Body.String(), tt.wantBody)
+			}
+		})
+	}
+}
+
+func TestRestoreTenant(t *testing.T) {
+	workflowID := "provision-acme"
+	active := &model.Tenant{
+		TenantID:   "acme",
+		Status:     model.TenantStatusActive,
+		WorkflowID: &workflowID,
+	}
+	provisioning := &model.Tenant{
+		TenantID: "acme",
+		Status:   model.TenantStatusProvisioning,
+	}
+
+	validBody := func() *strings.Reader {
+		return strings.NewReader(`{"backupID":7}`)
+	}
+
+	tests := []struct {
+		name       string
+		store      *stubTenantStore
+		body       *strings.Reader
+		starterErr error
+		wantStatus int
+		wantBody   string
+	}{
+		{
+			name:       "active tenant accepted",
+			store:      &stubTenantStore{tenant: active},
+			body:       validBody(),
+			wantStatus: http.StatusAccepted,
+			wantBody:   `"workflowID":"restore-acme","status":"restoring"`,
+		},
+		{
+			name:       "missing backupID rejected",
+			store:      &stubTenantStore{tenant: active},
+			body:       strings.NewReader(`{}`),
+			wantStatus: http.StatusBadRequest,
+			wantBody:   `"error":"backupID is required"`,
+		},
+		{
+			name:       "invalid JSON rejected",
+			store:      &stubTenantStore{tenant: active},
+			body:       strings.NewReader(`{`),
+			wantStatus: http.StatusBadRequest,
+			wantBody:   `"error":"invalid JSON body"`,
+		},
+		{
+			name:       "not found",
+			store:      &stubTenantStore{err: repository.ErrNotFound},
+			body:       validBody(),
+			wantStatus: http.StatusNotFound,
+			wantBody:   `"error":"tenant not found"`,
+		},
+		{
+			name:       "non-active tenant conflicts",
+			store:      &stubTenantStore{tenant: provisioning},
+			body:       validBody(),
+			wantStatus: http.StatusConflict,
+			wantBody:   `"error":"tenant must be active to restore"`,
+		},
+		{
+			name:       "already restoring conflicts",
+			store:      &stubTenantStore{tenant: active},
+			body:       validBody(),
+			starterErr: serviceerror.NewWorkflowExecutionAlreadyStarted("already started", "restore-acme", "run-1"),
+			wantStatus: http.StatusConflict,
+			wantBody:   `"error":"restore already in progress for this tenant"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stub := &stubWorkflowStarter{err: tt.starterErr}
+			h := newTestTenantHandler(stub, tt.store)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/tenants/acme/restore", tt.body)
+			req.SetPathValue("tenantID", "acme")
+			rec := httptest.NewRecorder()
+
+			h.RestoreTenant(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if tt.wantBody != "" && !strings.Contains(rec.Body.String(), tt.wantBody) {
+				t.Errorf("body = %q, want to contain %q", rec.Body.String(), tt.wantBody)
+			}
+		})
+	}
 }

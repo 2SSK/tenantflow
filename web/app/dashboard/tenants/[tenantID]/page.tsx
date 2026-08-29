@@ -14,7 +14,16 @@ import {
   type Tenant,
   type AuditEvent,
 } from "@/lib/types";
-import { ArrowLeft, Loader2, Trash2, Dot, Rocket } from "lucide-react";
+import { ArrowLeft, Loader2, Trash2, Dot, Rocket, DatabaseBackup, RotateCcw } from "lucide-react";
+
+type Backup = {
+  id: number;
+  tenantID: string;
+  filename: string;
+  status: string;
+  createdAt: string;
+  completedAt?: string;
+};
 
 export default function TenantDetailPage() {
   const { tenantID } = useParams<{ tenantID: string }>();
@@ -27,6 +36,10 @@ export default function TenantDetailPage() {
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [upgrading, setUpgrading] = useState(false);
+  const [migrating, setMigrating] = useState(false);
+  const [backingUp, setBackingUp] = useState(false);
+  const [restoringID, setRestoringID] = useState<number | null>(null);
+  const [backups, setBackups] = useState<Backup[]>([]);
 
   const isAdmin = session?.user?.realmRoles?.includes("platform-admin");
 
@@ -34,15 +47,20 @@ export default function TenantDetailPage() {
     const load = async () => {
       setLoading(true);
       try {
-        const [tenantRes, eventsRes] = await Promise.all([
+        const [tenantRes, eventsRes, backupsRes] = await Promise.all([
           fetch(`/api/tenants/${tenantID}`),
           fetch(`/api/tenants/${tenantID}/events`),
+          fetch(`/api/tenants/${tenantID}/backups`),
         ]);
         if (!tenantRes.ok) throw new Error("Tenant not found");
         setTenant(await tenantRes.json());
         if (eventsRes.ok) {
           const data = await eventsRes.json();
           setEvents(data.events ?? []);
+        }
+        if (backupsRes.ok) {
+          const data = await backupsRes.json();
+          setBackups(data.backups ?? []);
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load");
@@ -61,6 +79,18 @@ export default function TenantDetailPage() {
       if (res.ok) {
         const data = await res.json();
         setEvents(data.events ?? []);
+      }
+    } catch {
+      // ignore transient refresh failures; the user can reload
+    }
+  };
+
+  const refetchBackups = async () => {
+    try {
+      const res = await fetch(`/api/tenants/${tenantID}/backups`);
+      if (res.ok) {
+        const data = await res.json();
+        setBackups(data.backups ?? []);
       }
     } catch {
       // ignore transient refresh failures; the user can reload
@@ -102,6 +132,67 @@ export default function TenantDetailPage() {
       alert(err instanceof Error ? err.message : "Failed to upgrade tenant");
     } finally {
       setUpgrading(false);
+    }
+  };
+
+  const handleMigrate = async () => {
+    setMigrating(true);
+    try {
+      const res = await fetch(`/api/tenants/${tenantID}/migrate`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const body = await res.json();
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      // Re-fetch events to surface the TENANT_MIGRATING event immediately.
+      await refetchEvents();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to migrate tenant");
+    } finally {
+      setMigrating(false);
+    }
+  };
+
+  const handleBackup = async () => {
+    setBackingUp(true);
+    try {
+      const res = await fetch(`/api/tenants/${tenantID}/backup`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const body = await res.json();
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      // Re-fetch events + backups so the pending record and the
+      // TENANT_BACKING_UP event surface immediately.
+      await Promise.all([refetchEvents(), refetchBackups()]);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to backup tenant");
+    } finally {
+      setBackingUp(false);
+    }
+  };
+
+  const handleRestore = async (backupID: number) => {
+    setRestoringID(backupID);
+    try {
+      const res = await fetch(`/api/tenants/${tenantID}/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ backupID }),
+      });
+      if (!res.ok) {
+        const body = await res.json();
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      // Re-fetch events so the TENANT_RESTORING event and (eventually) the
+      // TENANT_RESTORED / TENANT_RESTORE_FAILED events surface on the timeline.
+      await refetchEvents();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to restore tenant");
+    } finally {
+      setRestoringID(null);
     }
   };
 
@@ -181,6 +272,36 @@ export default function TenantDetailPage() {
                   Upgrade
                 </Button>
               )}
+              {!confirmDelete && tenant.status === "active" && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={migrating}
+                  onClick={handleMigrate}
+                >
+                  {migrating ? (
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Rocket className="mr-1.5 h-3.5 w-3.5" />
+                  )}
+                  Migrate
+                </Button>
+              )}
+              {!confirmDelete && tenant.status === "active" && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={backingUp}
+                  onClick={handleBackup}
+                >
+                  {backingUp ? (
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <DatabaseBackup className="mr-1.5 h-3.5 w-3.5" />
+                  )}
+                  Backup
+                </Button>
+              )}
               {!confirmDelete ? (
                 <Button
                   variant="destructive"
@@ -223,6 +344,62 @@ export default function TenantDetailPage() {
       </div>
 
       <Separator />
+
+      {/* ── Backups ── */}
+      <div className="shrink-0 space-y-2">
+        <h2 className="text-lg font-semibold">Backups</h2>
+        {backups.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No backups taken yet.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {backups.map((backup) => (
+              <Card key={backup.id}>
+                <CardContent className="flex items-center justify-between p-3">
+                  <div className="min-w-0">
+                    <p className="truncate font-mono text-xs text-muted-foreground">
+                      {backup.filename}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {new Date(backup.createdAt).toLocaleString()}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {backup.status === "completed" && isAdmin && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={restoringID !== null}
+                        onClick={() => handleRestore(backup.id)}
+                      >
+                        {restoringID === backup.id ? (
+                          <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+                        )}
+                        Restore
+                      </Button>
+                    )}
+                    <Badge
+                      variant="outline"
+                      className={
+                        backup.status === "completed"
+                          ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
+                          : backup.status === "failed"
+                            ? "bg-destructive/10 text-destructive border-destructive/20"
+                            : "bg-amber-500/10 text-amber-500 border-amber-500/20"
+                      }
+                    >
+                      {backup.status}
+                    </Badge>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* ── Scrollable audit events ── */}
       <div className="flex min-h-0 flex-1 flex-col">

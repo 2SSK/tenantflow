@@ -13,6 +13,9 @@ import {
   Rocket,
   CircleAlert,
   Undo2,
+  RefreshCw,
+  GitMerge,
+  DatabaseZap,
 } from "lucide-react";
 
 export type Tenant = {
@@ -87,4 +90,13 @@ export const AUDIT_EVENT_ICONS: Record<string, LucideIcon> = {
   TENANT_UPGRADED: Rocket,
   TENANT_UPGRADE_FAILED: CircleAlert,
   TENANT_QUOTA_ROLLED_BACK: Undo2,
+  TENANT_MIGRATING: RefreshCw,
+  TENANT_MIGRATED: GitMerge,
+  TENANT_MIGRATE_FAILED: CircleAlert,
+  TENANT_BACKING_UP: RotateCcw,
+  TENANT_BACKUP_CREATED: Database,
+  TENANT_BACKUP_FAILED: CircleAlert,
+  TENANT_RESTORING: RotateCcw,
+  TENANT_RESTORED: DatabaseZap,
+  TENANT_RESTORE_FAILED: CircleAlert,
 };

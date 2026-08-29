@@ -16,6 +16,15 @@ const (
 	AuditEventTenantUpgraded      AuditEventType = "TENANT_UPGRADED"
 	AuditEventTenantUpgradeFailed AuditEventType = "TENANT_UPGRADE_FAILED"
 	AuditEventTenantQuotaRolled   AuditEventType = "TENANT_QUOTA_ROLLED_BACK"
+	AuditEventTenantMigrating     AuditEventType = "TENANT_MIGRATING"
+	AuditEventTenantMigrated      AuditEventType = "TENANT_MIGRATED"
+	AuditEventTenantMigrateFailed AuditEventType = "TENANT_MIGRATE_FAILED"
+	AuditEventTenantBackingUp     AuditEventType = "TENANT_BACKING_UP"
+	AuditEventTenantBackupCreated AuditEventType = "TENANT_BACKUP_CREATED"
+	AuditEventTenantBackupFailed  AuditEventType = "TENANT_BACKUP_FAILED"
+	AuditEventTenantRestoring     AuditEventType = "TENANT_RESTORING"
+	AuditEventTenantRestored      AuditEventType = "TENANT_RESTORED"
+	AuditEventTenantRestoreFailed AuditEventType = "TENANT_RESTORE_FAILED"
 )
 
 type AuditEvent struct {
