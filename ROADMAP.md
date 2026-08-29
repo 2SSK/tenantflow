@@ -28,6 +28,7 @@
 13. [Learning Goals Checklist](#13-learning-goals-checklist)
 14. [Showable Artifacts](#14-showable-artifacts)
 15. [Interview Talking Points](#15-interview-talking-points)
+15.5 [Design Notes & Trade-offs (Phase 6)](#155-design-notes--trade-offs-phase-6)
 16. [Open Decisions](#16-open-decisions)
 
 ---
@@ -779,7 +780,7 @@ Next.js app in `web/`:
 | 6.2 | Shared isolation tenant creation | ☑      |
 | 6.3 | Upgrade workflow + compensation  | ☑      |
 | 6.4 | Upgrade endpoint + UI            | ☑      |
-| 6.5 | Trade-off notes written          | ☐      |
+| 6.5 | Trade-off notes written          | ☑      |
 
 ### Phase 7 — Migrate/Backup/Restore/Delete
 
@@ -915,6 +916,50 @@ Questions this project lets you answer with authority:
 9. "Walk me through your architecture." → The diagram in section 3, plus the provider + IAM abstractions.
 10. "How do you migrate a live tenant without downtime?" → `TenantMigrateWorkflow`: lock → snapshot → sync → switch → unlock.
 11. "What happens when retries are exhausted?" → Compensation, then the DLQ state (failed run + audit + manual replay endpoint).
+
+---
+
+## 15.5 Design Notes & Trade-offs (Phase 6)
+
+Deep-dive notes on the decisions made in Phase 6. These are the "why" behind the code, written to hold up under interview questioning.
+
+### Dedicated vs shared isolation
+
+|                       | Dedicated (db-per-tenant) | Shared (schema-per-tenant) |
+| --------------------- | ------------------------- | -------------------------- |
+| Isolation             | Strongest (separate DB)   | Logical only (`tenant_id`) |
+| Cost at scale         | High (many small DBs)     | Low (shared capacity)      |
+| Tenant migration      | Independent (per DB)      | Linked to shared schema    |
+| Cross-tenant blast radius | Rows in one DB          | A bad query can hit all    |
+| Upgrade path          | Upgrade each DB           | One schema change, low risk|
+
+**Why we implemented both:** a real control plane must let operators pick per tenant (compliance/major tenants → dedicated; long-tail → shared). The `CloudProvider` interface is the seam that makes both modes plain data, and the create saga branches on `isolation_mode`.
+
+### Compensation vs retry decision (upgrade saga)
+
+- **Retry first, compensate last.** Some failures are transient (a directory call, a network blip). Temporal retries those for free. Only when retries are exhausted does the saga's compensation need to run. This is the "failure ladder": retries → compensation → DLQ.
+- **Guard flags keep compensation idempotent.** The workflow tracks `quotaRaised`; compensation only rolls back quotas if we actually raised them. Without the guard, a rollback after the forward activity never ran would double-count or error (rolling back a quota that was never raised).
+- **Compensation must be able to undo a forward step.** `VerifyTenantActive` returns the tenant's old quota precisely so `RollbackQuotas` can restore it exactly. This is the rule: *a mutating activity's result payload is what its compensation needs*.
+
+### In-memory quota store (a deliberate MVP simplification) — the headline trade-off
+
+- The quota store lives **only in worker memory** and is seeded with `DefaultQuota` for every tenant. This is a stopgap for the MVP demo, not production.
+- **Consequence:** quotas reset to `DefaultQuota` on worker restart; there is no persistence and no cross-worker visibility. Coordinated reads/writes across multiple workers, or durable per-tenant quota, need the store backed by the control-plane Postgres (or a dedicated service).
+- This is called out explicitly because it violates the "long-term architecture" rule until Phase 7+ — we know it, and the `QuotaStore` interface is the seam to swap the in-memory impl for a durable one without touching the workflow.
+
+### Workflow ID reuse limitation
+
+- Every operation uses a fixed workflow ID (`upgrade-<id>`, `provision-<id>`, `delete-<id>`) with `REJECT_DUPLICATE` policy. Temporal **never re-runs a completed/failed workflow under the same ID**, so a second upgrade of a tenant whose previous upgrade completed returns **409**.
+- **Net effect:** a tenant can only be upgraded once (or retried only after the failed instance is properly superseded). This is safe but not ergonomic.
+- **Future work:** use `ALLOW_DUPLICATE_FAILED_ONLY` so a *failed* operation can be retried by re-posting while a *completed* one still rejects — preserving idempotency while unblocking recovery. (Noted, not yet implemented.)
+
+### VerifyTenantActive guards non-active tenants
+
+- The upgrade can only proceed from a tenant in `active` state. Missing → 404; not active → 409. This prevents upgrading a tenant that is provisioning, deleted, or failed, which would leave inconsistent state. The tenant status is the control plane's single source of truth for lifecycle transitions.
+
+### Compensation writes are audit-visible
+
+- `RollbackQuotas` writes a `TENANT_QUOTA_ROLLED_BACK` audit event. The dashboard timeline therefore shows the saga *reason* — you can see a rollback happened, not just that "things failed." This makes the compensation path demonstrable in the UI and in demos.
 
 ---
 
