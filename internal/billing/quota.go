@@ -2,9 +2,17 @@ package billing
 
 import (
 	"context"
-	"fmt"
 	"sync"
 )
+
+// DefaultQuota is the baseline plan every tenant starts on. It is returned by
+// Get when a tenant has no explicitly-recorded quota yet (e.g. it has never
+// been upgraded). This models "every tenant begins on the basic plan."
+var DefaultQuota = Quota{
+	MaxUsers:     10,
+	MaxStorageGB: 5,
+	MaxSeats:     10,
+}
 
 type Quota struct {
 	MaxUsers     int
@@ -38,7 +46,7 @@ func (s *InMemoryQuotaStore) Get(_ context.Context, tenantID string) (Quota, err
 	defer s.mu.Unlock()
 	q, ok := s.data[tenantID]
 	if !ok {
-		return Quota{}, fmt.Errorf("quota not found for tenant %s", tenantID)
+		return DefaultQuota, nil
 	}
 	return q, nil
 }

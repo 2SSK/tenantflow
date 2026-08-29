@@ -78,6 +78,13 @@ type DeleteTenantResponse struct {
 	Status     string `json:"status"`
 }
 
+// UpgradeTenantResponse is returned with HTTP 202 Accepted.
+type UpgradeTenantResponse struct {
+	TenantID   string `json:"tenantID"`
+	WorkflowID string `json:"workflowID"`
+	Status     string `json:"status"`
+}
+
 // ListTenantsResponse is returned by GET /api/v1/tenants
 type ListTenantsResponse struct {
 	Tenants []TenantResponse `json:"tenants"`
@@ -212,6 +219,56 @@ func (h *TenantHandler) DeleteTenant(w http.ResponseWriter, r *http.Request) {
 		TenantID:   tenantID,
 		WorkflowID: run.GetID(),
 		Status:     string(model.TenantStatusDeleting),
+	})
+}
+
+// UpgradeTenant handles POST /api/v1/tenants/{tenantID}/upgrade
+func (h *TenantHandler) UpgradeTenant(w http.ResponseWriter, r *http.Request) {
+	tenantID := r.PathValue("tenantID")
+
+	tenant, err := h.store.GetTenant(r.Context(), tenantID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "tenant not found")
+			return
+		}
+		h.log.Error("get tenant for upgrade", "tenantID", tenantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get tenant")
+		return
+	}
+
+	// Only active tenants can be upgraded.
+	if tenant.Status != model.TenantStatusActive {
+		writeError(w, http.StatusConflict, "tenant must be active to upgrade")
+		return
+	}
+
+	workflowID := "upgrade-" + tenantID
+
+	run, err := h.temporal.ExecuteWorkflow(r.Context(), client.StartWorkflowOptions{
+		ID:                                       workflowID,
+		TaskQueue:                                tfworkflow.TaskQueue,
+		WorkflowIDReusePolicy:                    enums.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
+		WorkflowExecutionErrorWhenAlreadyStarted: true,
+	}, tfworkflow.UpgradeTenantWorkflow, tfworkflow.UpgradeInput{
+		TenantID: tenantID,
+	})
+	if err != nil {
+		var already *serviceerror.WorkflowExecutionAlreadyStarted
+		if errors.As(err, &already) {
+			writeError(w, http.StatusConflict, "upgrade already in progress for this tenant")
+			return
+		}
+		h.log.Error("start upgrade workflow", "tenantID", tenantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to start upgrade workflow")
+		return
+	}
+
+	h.log.Info("upgrade workflow started", "tenantID", tenantID, "workflowID", run.GetID())
+	writeJSON(w, http.StatusAccepted, UpgradeTenantResponse{
+		TenantID:   tenantID,
+		WorkflowID: run.GetID(),
+		Status:     "upgrading",
 	})
 }
 

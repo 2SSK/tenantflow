@@ -25,6 +25,7 @@ func New(tc handler.WorkflowStarter, store handler.TenantStore, auditStore handl
 	protected := http.NewServeMux()
 	protected.Handle("POST /api/v1/tenants", auth.RequireRole("platform-admin", http.HandlerFunc(tenants.CreateTenant)))
 	protected.Handle("DELETE /api/v1/tenants/{tenantID}", auth.RequireRole("platform-admin", http.HandlerFunc(tenants.DeleteTenant)))
+	protected.Handle("POST /api/v1/tenants/{tenantID}/upgrade", auth.RequireRole("platform-admin", http.HandlerFunc(tenants.UpgradeTenant)))
 	root.Handle("/api/", auth.RequireAuth(authProvider, protected))
 
 	return root

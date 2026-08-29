@@ -327,6 +327,73 @@ func TestDeleteTenant(t *testing.T) {
 	}
 }
 
+func TestUpgradeTenant(t *testing.T) {
+	workflowID := "provision-acme"
+	active := &model.Tenant{
+		TenantID:   "acme",
+		Status:     model.TenantStatusActive,
+		WorkflowID: &workflowID,
+	}
+	provisioning := &model.Tenant{
+		TenantID: "acme",
+		Status:   model.TenantStatusProvisioning,
+	}
+
+	tests := []struct {
+		name       string
+		store      *stubTenantStore
+		starterErr error
+		wantStatus int
+		wantBody   string
+	}{
+		{
+			name:       "active tenant accepted",
+			store:      &stubTenantStore{tenant: active},
+			wantStatus: http.StatusAccepted,
+			wantBody:   `"workflowID":"upgrade-acme","status":"upgrading"`,
+		},
+		{
+			name:       "not found",
+			store:      &stubTenantStore{err: repository.ErrNotFound},
+			wantStatus: http.StatusNotFound,
+			wantBody:   `"error":"tenant not found"`,
+		},
+		{
+			name:       "non-active tenant conflicts",
+			store:      &stubTenantStore{tenant: provisioning},
+			wantStatus: http.StatusConflict,
+			wantBody:   `"error":"tenant must be active to upgrade"`,
+		},
+		{
+			name:       "already upgrading conflicts",
+			store:      &stubTenantStore{tenant: active},
+			starterErr: serviceerror.NewWorkflowExecutionAlreadyStarted("already started", "upgrade-acme", "run-1"),
+			wantStatus: http.StatusConflict,
+			wantBody:   `"error":"upgrade already in progress for this tenant"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stub := &stubWorkflowStarter{err: tt.starterErr}
+			h := newTestTenantHandler(stub, tt.store)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/tenants/acme/upgrade", nil)
+			req.SetPathValue("tenantID", "acme")
+			rec := httptest.NewRecorder()
+
+			h.UpgradeTenant(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if tt.wantBody != "" && !strings.Contains(rec.Body.String(), tt.wantBody) {
+				t.Errorf("body = %q, want to contain %q", rec.Body.String(), tt.wantBody)
+			}
+		})
+	}
+}
+
 func (s *stubAuditStore) ListEvents(ctx context.Context, tenantID string) ([]model.AuditEvent, error) {
 	return nil, nil
 }

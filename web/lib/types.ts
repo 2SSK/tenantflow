@@ -9,6 +9,10 @@ import {
   RotateCcw,
   CircleCheck,
   Trash2,
+  TrendingUp,
+  Rocket,
+  CircleAlert,
+  Undo2,
 } from "lucide-react";
 
 export type Tenant = {
@@ -79,4 +83,8 @@ export const AUDIT_EVENT_ICONS: Record<string, LucideIcon> = {
   TENANT_DELETING: RotateCcw,
   TENANT_DEPROVISIONED: CircleCheck,
   TENANT_DELETED: Trash2,
+  TENANT_UPGRADING: TrendingUp,
+  TENANT_UPGRADED: Rocket,
+  TENANT_UPGRADE_FAILED: CircleAlert,
+  TENANT_QUOTA_ROLLED_BACK: Undo2,
 };

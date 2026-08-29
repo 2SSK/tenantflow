@@ -14,7 +14,7 @@ import {
   type Tenant,
   type AuditEvent,
 } from "@/lib/types";
-import { ArrowLeft, Loader2, Trash2, Dot } from "lucide-react";
+import { ArrowLeft, Loader2, Trash2, Dot, Rocket } from "lucide-react";
 
 export default function TenantDetailPage() {
   const { tenantID } = useParams<{ tenantID: string }>();
@@ -26,6 +26,7 @@ export default function TenantDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [upgrading, setUpgrading] = useState(false);
 
   const isAdmin = session?.user?.realmRoles?.includes("platform-admin");
 
@@ -52,6 +53,20 @@ export default function TenantDetailPage() {
     load();
   }, [tenantID]);
 
+  // Re-fetch audit events (used after starting an upgrade so the timeline
+  // picks up the immediately-emitted TENANT_UPGRADING event).
+  const refetchEvents = async () => {
+    try {
+      const res = await fetch(`/api/tenants/${tenantID}/events`);
+      if (res.ok) {
+        const data = await res.json();
+        setEvents(data.events ?? []);
+      }
+    } catch {
+      // ignore transient refresh failures; the user can reload
+    }
+  };
+
   const handleDelete = async () => {
     setDeleting(true);
     try {
@@ -67,6 +82,26 @@ export default function TenantDetailPage() {
       alert(err instanceof Error ? err.message : "Failed to delete tenant");
       setDeleting(false);
       setConfirmDelete(false);
+    }
+  };
+
+  const handleUpgrade = async () => {
+    setUpgrading(true);
+    try {
+      const res = await fetch(`/api/tenants/${tenantID}/upgrade`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const body = await res.json();
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      // Re-fetch events to surface the TENANT_UPGRADING event immediately;
+      // later events stream in as the worker runs.
+      await refetchEvents();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to upgrade tenant");
+    } finally {
+      setUpgrading(false);
     }
   };
 
@@ -128,9 +163,24 @@ export default function TenantDetailPage() {
             </div>
           </div>
 
-          {/* Delete button — admin only */}
+          {/* Delete + Upgrade buttons — admin only */}
           {isAdmin && (
-            <div className="shrink-0">
+            <div className="flex shrink-0 items-center gap-2">
+              {!confirmDelete && tenant.status === "active" && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={upgrading}
+                  onClick={handleUpgrade}
+                >
+                  {upgrading ? (
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Rocket className="mr-1.5 h-3.5 w-3.5" />
+                  )}
+                  Upgrade
+                </Button>
+              )}
               {!confirmDelete ? (
                 <Button
                   variant="destructive"
