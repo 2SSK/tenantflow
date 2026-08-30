@@ -95,7 +95,7 @@ func (a *UpgradeActivities) RollbackQuotas(ctx context.Context, tenantID string,
 		TenantID:  tenantID,
 		EventType: model.AuditEventTenantQuotaRolled,
 		Actor:     "workflow",
-		Payload:   map[string]any{"reason": "saga compensation"},
+		Payload:   compensationEvent("RollbackQuotas", "saga compensation"),
 	})
 }
 

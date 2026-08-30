@@ -121,7 +121,18 @@ func (a *MigrateActivities) MarkTenantMigrated(ctx context.Context, tenantID str
 func (a *MigrateActivities) DropTenantAuxDatabase(ctx context.Context, tenantID string) error {
 	newDB := newDBName(tenantID)
 	activity.GetLogger(ctx).Info("Dropping auxiliary database (compensation)", "tenantID", tenantID, "database", newDB)
-	return a.dropAux(ctx, newDB)
+	if err := a.dropAux(ctx, newDB); err != nil {
+		return err
+	}
+
+	// The rollback step removed real infrastructure from the control plane's
+	// database cluster: record it so the compensation history is observable.
+	return a.auditRepo.WriteEvent(ctx, &model.AuditEvent{
+		TenantID:  tenantID,
+		EventType: model.AuditEventTenantMigrateRolledBack,
+		Actor:     "workflow",
+		Payload:   compensationEvent("DropTenantAuxDatabase", "saga compensation"),
+	})
 }
 
 func (a *MigrateActivities) dropAux(ctx context.Context, dbName string) error {

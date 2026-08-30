@@ -117,4 +117,27 @@ export const AUDIT_EVENT_ICONS: Record<string, LucideIcon> = {
   TENANT_DELETE_CANCELLED: Undo2,
   TENANT_DELETE_FAILED: CircleAlert,
   TENANT_REPROVISION_REQUESTED: RefreshCw,
+  TENANT_PROVISION_ROLLED_BACK: Undo2,
+  TENANT_MIGRATION_ROLLED_BACK: RotateCcw,
+  TENANT_RESTORE_ROLLED_BACK: RotateCcw,
 };
+
+// Event types emitted by saga compensation (rollback) steps. Combined with
+// the payload "compensation": true marker, this is what the compensation
+// history view uses to classify rollbacks.
+export const COMPENSATION_EVENT_TYPES = new Set([
+  "TENANT_PROVISION_ROLLED_BACK",
+  "TENANT_QUOTA_ROLLED_BACK",
+  "TENANT_MIGRATION_ROLLED_BACK",
+  "TENANT_RESTORE_ROLLED_BACK",
+]);
+
+export function isCompensationEvent(event: {
+  EventType: string;
+  Payload?: Record<string, unknown>;
+}): boolean {
+  return (
+    COMPENSATION_EVENT_TYPES.has(event.EventType) ||
+    event.Payload?.compensation === true
+  );
+}

@@ -118,8 +118,8 @@ func (a *ProvisionActivities) DropTenantDatabase(ctx context.Context, tenantID s
 
 	return a.auditRepo.WriteEvent(ctx, &model.AuditEvent{
 		TenantID:  tenantID,
-		EventType: model.AuditEventTenantFailed,
+		EventType: model.AuditEventTenantProvisionRolledBack,
 		Actor:     "workflow",
-		Payload:   map[string]any{"action": "database_dropped", "reason": "saga compensation"},
+		Payload:   compensationEvent("DropTenantDatabase", "saga compensation"),
 	})
 }

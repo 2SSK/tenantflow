@@ -108,7 +108,16 @@ func (a *RestoreActivities) RestoreRollback(ctx context.Context, tenantID, preBa
 	if err := a.provider.RestoreDatabaseFromBackup(ctx, tenantDBName(tenantID), preBackupName); err != nil {
 		return fmt.Errorf("rollback restore for tenant %s: %w", tenantID, err)
 	}
-	return nil
+
+	// The rollback overwrote the live DB with the safety snapshot: record it
+	// so the compensation history shows exactly when and why the restore was
+	// undone.
+	return a.auditRepo.WriteEvent(ctx, &model.AuditEvent{
+		TenantID:  tenantID,
+		EventType: model.AuditEventTenantRestoreRolledBack,
+		Actor:     "workflow",
+		Payload:   compensationEvent("RestoreRollback", "saga compensation"),
+	})
 }
 
 func (a *RestoreActivities) MarkTenantRestoreFailed(ctx context.Context, tenantID string) error {

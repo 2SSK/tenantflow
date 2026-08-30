@@ -11,6 +11,7 @@ import { Separator } from "@/components/ui/separator";
 import {
   TENANT_STATUS_CONFIG,
   AUDIT_EVENT_ICONS,
+  isCompensationEvent,
   type Tenant,
   type AuditEvent,
 } from "@/lib/types";
@@ -269,6 +270,8 @@ export default function TenantDetailPage() {
   if (!tenant) return <p className="text-sm text-muted-foreground">Tenant not found</p>;
 
   const statusConfig = TENANT_STATUS_CONFIG[tenant.status];
+  // Rollback steps recorded by the saga's compensation paths.
+  const compEvents = events.filter(isCompensationEvent);
 
   return (
     <div className="flex h-full flex-col gap-6">
@@ -505,6 +508,53 @@ export default function TenantDetailPage() {
         )}
       </div>
 
+      {/* ── Compensation history ── */}
+      <div className="shrink-0">
+        <div className="mb-4">
+          <h2 className="text-lg font-semibold">Compensation History</h2>
+          <p className="text-sm text-muted-foreground">
+            Rollback steps the saga ran to clean up after failures.
+          </p>
+        </div>
+        {compEvents.length === 0 ? (
+          <p className="mb-4 text-sm text-muted-foreground">
+            No rollbacks recorded for this tenant.
+          </p>
+        ) : (
+          <div className="mb-4 space-y-2">
+            {compEvents.map((event) => {
+              const Icon = AUDIT_EVENT_ICONS[event.EventType] ?? Undo2;
+              const step =
+                typeof event.Payload?.step === "string"
+                  ? event.Payload.step
+                  : event.EventType;
+              const reason =
+                typeof event.Payload?.reason === "string"
+                  ? event.Payload.reason
+                  : "saga compensation";
+              return (
+                <Card key={event.ID}>
+                  <CardContent className="flex items-center justify-between gap-3 p-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <Icon className="h-4 w-4 shrink-0 text-amber-500" />
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{step}</p>
+                        <p className="truncate text-xs text-muted-foreground">
+                          {reason}
+                        </p>
+                      </div>
+                    </div>
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {new Date(event.CreatedAt).toLocaleString()}
+                    </span>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       {/* ── Scrollable audit events ── */}
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="mb-4 shrink-0">
@@ -517,14 +567,22 @@ export default function TenantDetailPage() {
         ) : (
           <div className="min-h-0 flex-1 overflow-auto pr-2">
             <div className="relative ml-3 space-y-4 border-l-2 border-border pl-6">
-              {events.map((event) => (
+              {events.map((event) => {
+                const comp = isCompensationEvent(event);
+                return (
                 <div key={event.ID} className="relative">
                   {/* Timeline dot — icon centered on the vertical line.
                       The line (2px border-l) sits at the container's left edge.
                       Content starts 26px in (2px border + 24px pl-6). A 16px dot
                       is centered on the line when its left edge is 33px back:
                       26 + 16/2 = 34 ≈ 33 (accounting for the 2px border). */}
-                  <div className="absolute -left-[33px] top-1 flex h-4 w-4 items-center justify-center rounded-full border border-border bg-background text-primary">
+                  <div
+                    className={`absolute -left-[33px] top-1 flex h-4 w-4 items-center justify-center rounded-full border ${
+                      comp
+                        ? "border-amber-500/40 bg-amber-500/10 text-amber-500"
+                        : "border-border bg-background text-primary"
+                    }`}
+                  >
                     {(() => {
                       const Icon = AUDIT_EVENT_ICONS[event.EventType];
                       return Icon ? (
@@ -537,9 +595,19 @@ export default function TenantDetailPage() {
 
                   <Card>
                     <CardContent className="p-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-medium">
-                          {event.EventType}
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="flex items-center gap-2">
+                          <span className="text-sm font-medium">
+                            {event.EventType}
+                          </span>
+                          {comp && (
+                            <Badge
+                              variant="outline"
+                              className="border-amber-500/20 bg-amber-500/10 text-amber-500"
+                            >
+                              Rolled back
+                            </Badge>
+                          )}
                         </span>
                         <span className="text-xs text-muted-foreground">
                           {new Date(event.CreatedAt).toLocaleString()}
@@ -565,7 +633,8 @@ export default function TenantDetailPage() {
                     </CardContent>
                   </Card>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
