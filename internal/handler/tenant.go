@@ -19,6 +19,9 @@ import (
 
 type WorkflowStarter interface {
 	ExecuteWorkflow(ctx context.Context, options client.StartWorkflowOptions, workflow any, args ...any) (client.WorkflowRun, error)
+	// SignalWorkflow delivers a named signal to a running workflow — used by
+	// the cancel-delete endpoint to interrupt the soft-delete grace period.
+	SignalWorkflow(ctx context.Context, workflowID, runID, signalName string, arg any) error
 }
 
 type TenantStore interface {
@@ -78,8 +81,23 @@ type TenantResponse struct {
 	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
+// defaultDeleteGracePeriod is the soft-delete window an operator may cancel
+// within. The workflow receives this via DeleteInput so tests and tooling can
+// pass shorter durations.
+const defaultDeleteGracePeriod = 30 * 24 * time.Hour
+
 // DeleteTenantResponse is returned with HTTP 202 Accepted.
+// GracePeriodDays tells the operator how long they have to cancel the deletion.
 type DeleteTenantResponse struct {
+	TenantID        string `json:"tenantID"`
+	WorkflowID      string `json:"workflowID"`
+	Status          string `json:"status"`
+	GracePeriodDays int    `json:"gracePeriodDays"`
+}
+
+// CancelTenantDeleteResponse is returned with HTTP 202 Accepted when a
+// cancel-delete signal has been accepted.
+type CancelTenantDeleteResponse struct {
 	TenantID   string `json:"tenantID"`
 	WorkflowID string `json:"workflowID"`
 	Status     string `json:"status"`
@@ -229,10 +247,15 @@ func toTenantResponse(t *model.Tenant) TenantResponse {
 }
 
 // DeleteTenant handles DELETE /api/v1/tenants/{tenantID}
+//
+// This starts a soft-delete workflow: the tenant is marked "deleting" and
+// stays that way for the 30-day grace period before teardown. The operator
+// can cancel within that window via POST /api/v1/tenants/{tenantID}/cancel-delete.
 func (h *TenantHandler) DeleteTenant(w http.ResponseWriter, r *http.Request) {
 	tenantID := r.PathValue("tenantID")
 
-	if _, err := h.store.GetTenant(r.Context(), tenantID); err != nil {
+	tenant, err := h.store.GetTenant(r.Context(), tenantID)
+	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "tenant not found")
 			return
@@ -242,15 +265,28 @@ func (h *TenantHandler) DeleteTenant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	workflowID := "deprovision-" + tenantID
+	// A tenant already being deleted (or already deleted) must not start a
+	// second grace period. A "failed" tenant is still deletable — deletes can
+	// be used as a cleanup operation.
+	if tenant.Status == model.TenantStatusDeleting {
+		writeError(w, http.StatusConflict, "deletion already in progress for this tenant")
+		return
+	}
+	if tenant.Status == model.TenantStatusDeleted {
+		writeError(w, http.StatusConflict, "tenant already deleted")
+		return
+	}
+
+	workflowID := "delete-" + tenantID
 
 	run, err := h.temporal.ExecuteWorkflow(r.Context(), client.StartWorkflowOptions{
 		ID:                                       workflowID,
 		TaskQueue:                                tfworkflow.TaskQueue,
 		WorkflowIDReusePolicy:                    enums.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
 		WorkflowExecutionErrorWhenAlreadyStarted: true,
-	}, tfworkflow.DeprovisionTenantWorkflow, tfworkflow.DeprovisionInput{
-		TenantID: tenantID,
+	}, tfworkflow.DeleteTenantWorkflow, tfworkflow.DeleteInput{
+		TenantID:    tenantID,
+		GracePeriod: defaultDeleteGracePeriod,
 	})
 	if err != nil {
 		var already *serviceerror.WorkflowExecutionAlreadyStarted
@@ -258,16 +294,69 @@ func (h *TenantHandler) DeleteTenant(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "deletion already in progress for this tenant")
 			return
 		}
-		h.log.Error("start deprovision workflow", "tenantID", tenantID, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to start deprovisioning workflow")
+		h.log.Error("start delete workflow", "tenantID", tenantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to start delete workflow")
 		return
 	}
 
-	h.log.Info("deprovision workflow started", "tenantID", tenantID, "workflowID", run.GetID())
+	h.log.Info("delete workflow started", "tenantID", tenantID, "workflowID", run.GetID())
 	writeJSON(w, http.StatusAccepted, DeleteTenantResponse{
+		TenantID:        tenantID,
+		WorkflowID:      run.GetID(),
+		Status:          string(model.TenantStatusDeleting),
+		GracePeriodDays: int(defaultDeleteGracePeriod.Hours() / 24),
+	})
+}
+
+// CancelTenantDelete handles POST /api/v1/tenants/{tenantID}/cancel-delete
+//
+// It signals the running DeleteTenantWorkflow to abort the grace period and
+// restore the tenant to active. The signal is delivered asynchronously by
+// Temporal, so we return 202 as soon as it is accepted, not when the restore
+// actually happens.
+func (h *TenantHandler) CancelTenantDelete(w http.ResponseWriter, r *http.Request) {
+	tenantID := r.PathValue("tenantID")
+
+	tenant, err := h.store.GetTenant(r.Context(), tenantID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "tenant not found")
+			return
+		}
+		h.log.Error("get tenant for cancel delete", "tenantID", tenantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get tenant")
+		return
+	}
+
+	// Only a tenant inside the grace period can be cancelled. If it is already
+	// gone or never was deleting, there is nothing to cancel.
+	if tenant.Status != model.TenantStatusDeleting {
+		writeError(w, http.StatusConflict, "tenant is not being deleted")
+		return
+	}
+
+	workflowID := "delete-" + tenantID
+
+	// An empty runID means "the running execution of this workflow ID" — we
+	// do not care which run it is, only that one exists for this tenant.
+	if err := h.temporal.SignalWorkflow(r.Context(), workflowID, "", tfworkflow.CancelDeleteSignalName, nil); err != nil {
+		// The workflow may have just completed (timer fired, teardown done) or
+		// failed between our get and the signal — an unavoidable race.
+		var notFound *serviceerror.NotFound
+		if errors.As(err, &notFound) {
+			writeError(w, http.StatusConflict, "delete workflow is not running")
+			return
+		}
+		h.log.Error("signal cancel delete", "tenantID", tenantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to signal delete workflow")
+		return
+	}
+
+	h.log.Info("cancel delete signalled", "tenantID", tenantID, "workflowID", workflowID)
+	writeJSON(w, http.StatusAccepted, CancelTenantDeleteResponse{
 		TenantID:   tenantID,
-		WorkflowID: run.GetID(),
-		Status:     string(model.TenantStatusDeleting),
+		WorkflowID: workflowID,
+		Status:     "cancelling",
 	})
 }
 

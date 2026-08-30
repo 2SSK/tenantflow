@@ -25,6 +25,10 @@ type stubWorkflowStarter struct {
 	startedOptions client.StartWorkflowOptions
 	startedArgs    []any
 	err            error
+	// signal captures the last SignalWorkflow call (workflowID, signalName).
+	signalWorkflowID string
+	signalName       string
+	signalErr        error
 }
 
 type stubTenantStore struct {
@@ -51,6 +55,12 @@ func (s *stubWorkflowStarter) ExecuteWorkflow(ctx context.Context, options clien
 		return nil, s.err
 	}
 	return &fakeRun{id: options.ID}, nil
+}
+
+func (s *stubWorkflowStarter) SignalWorkflow(ctx context.Context, workflowID, runID, signalName string, arg any) error {
+	s.signalWorkflowID = workflowID
+	s.signalName = signalName
+	return s.signalErr
 }
 
 // fakeRun implements client.WorkflowRun minimally.
@@ -298,7 +308,7 @@ func TestDeleteTenant(t *testing.T) {
 			name:       "accepted",
 			store:      &stubTenantStore{tenant: existing},
 			wantStatus: http.StatusAccepted,
-			wantBody:   `"workflowID":"deprovision-acme","status":"deleting"`,
+			wantBody:   `"workflowID":"delete-acme","status":"deleting","gracePeriodDays":30`,
 		},
 		{
 			name:       "not found",
@@ -308,8 +318,20 @@ func TestDeleteTenant(t *testing.T) {
 		},
 		{
 			name:       "already deleting",
+			store:      &stubTenantStore{tenant: &model.Tenant{TenantID: "acme", Status: model.TenantStatusDeleting}},
+			wantStatus: http.StatusConflict,
+			wantBody:   `"error":"deletion already in progress for this tenant"`,
+		},
+		{
+			name:       "already deleted",
+			store:      &stubTenantStore{tenant: &model.Tenant{TenantID: "acme", Status: model.TenantStatusDeleted}},
+			wantStatus: http.StatusConflict,
+			wantBody:   `"error":"tenant already deleted"`,
+		},
+		{
+			name:       "already started",
 			store:      &stubTenantStore{tenant: existing},
-			starterErr: serviceerror.NewWorkflowExecutionAlreadyStarted("already started", "deprovision-acme", "run-1"),
+			starterErr: serviceerror.NewWorkflowExecutionAlreadyStarted("already started", "delete-acme", "run-1"),
 			wantStatus: http.StatusConflict,
 			wantBody:   `"error":"deletion already in progress for this tenant"`,
 		},
@@ -331,6 +353,75 @@ func TestDeleteTenant(t *testing.T) {
 			}
 			if tt.wantBody != "" && !strings.Contains(rec.Body.String(), tt.wantBody) {
 				t.Errorf("body = %q, want to contain %q", rec.Body.String(), tt.wantBody)
+			}
+		})
+	}
+}
+
+func TestCancelTenantDelete(t *testing.T) {
+	tests := []struct {
+		name       string
+		store      *stubTenantStore
+		signalErr  error
+		wantStatus int
+		wantBody   string
+		wantSignal bool
+	}{
+		{
+			name:       "accepted",
+			store:      &stubTenantStore{tenant: &model.Tenant{TenantID: "acme", Status: model.TenantStatusDeleting}},
+			wantStatus: http.StatusAccepted,
+			wantBody:   `"workflowID":"delete-acme","status":"cancelling"`,
+			wantSignal: true,
+		},
+		{
+			name:       "not found",
+			store:      &stubTenantStore{err: repository.ErrNotFound},
+			wantStatus: http.StatusNotFound,
+			wantBody:   `"error":"tenant not found"`,
+		},
+		{
+			name:       "not deleting",
+			store:      &stubTenantStore{tenant: &model.Tenant{TenantID: "acme", Status: model.TenantStatusActive}},
+			wantStatus: http.StatusConflict,
+			wantBody:   `"error":"tenant is not being deleted"`,
+		},
+		{
+			name:       "workflow not running",
+			store:      &stubTenantStore{tenant: &model.Tenant{TenantID: "acme", Status: model.TenantStatusDeleting}},
+			signalErr:  serviceerror.NewNotFound("workflow not found"),
+			wantStatus: http.StatusConflict,
+			wantBody:   `"error":"delete workflow is not running"`,
+			wantSignal: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stub := &stubWorkflowStarter{signalErr: tt.signalErr}
+			h := newTestTenantHandler(stub, tt.store)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/tenants/acme/cancel-delete", nil)
+			req.SetPathValue("tenantID", "acme")
+			rec := httptest.NewRecorder()
+
+			h.CancelTenantDelete(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if tt.wantBody != "" && !strings.Contains(rec.Body.String(), tt.wantBody) {
+				t.Errorf("body = %q, want to contain %q", rec.Body.String(), tt.wantBody)
+			}
+			if tt.wantSignal {
+				if stub.signalWorkflowID != "delete-acme" {
+					t.Errorf("signalled workflowID = %q, want delete-acme", stub.signalWorkflowID)
+				}
+				if stub.signalName != tfworkflow.CancelDeleteSignalName {
+					t.Errorf("signal name = %q, want %q", stub.signalName, tfworkflow.CancelDeleteSignalName)
+				}
+			} else if stub.signalName != "" {
+				t.Errorf("unexpected signal sent: workflowID=%q name=%q", stub.signalWorkflowID, stub.signalName)
 			}
 		})
 	}

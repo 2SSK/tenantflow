@@ -29,6 +29,7 @@ type activityRegistration struct {
 func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, auditRepo repository.AuditRepository, backupRepo repository.BackupRepository, provider cloud.CloudProvider, identityProvider identity.IdentityProvider, log *slog.Logger) *Worker {
 	provision := activities.NewProvisionActivities(repo, auditRepo, provider)
 	deprovision := activities.NewDeprovisionActivities(repo, auditRepo)
+	cancelDelete := activities.NewCancelDeleteActivities(repo, auditRepo)
 	identityActs := activities.NewIdentityActivities(identityProvider)
 	quotaStore := billing.NewInMemoryQuotaStore()
 	upgrade := activities.NewUpgradeActivities(repo, auditRepo, quotaStore)
@@ -40,11 +41,11 @@ func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, auditRe
 
 	registerWorkflows(sdk, []any{
 		tfworkflow.ProvisionTenantWorkflow,
-		tfworkflow.DeprovisionTenantWorkflow,
 		tfworkflow.UpgradeTenantWorkflow,
 		tfworkflow.MigrateTenantWorkflow,
 		tfworkflow.BackupTenantWorkflow,
 		tfworkflow.RestoreTenantWorkflow,
+		tfworkflow.DeleteTenantWorkflow,
 	})
 
 	registerActivities(sdk, []activityRegistration{
@@ -58,6 +59,8 @@ func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, auditRe
 		{fn: deprovision.MarkTenantDeleting, name: activities.MarkTenantDeletingActivityName},
 		{fn: deprovision.DeprovisionTenant, name: activities.DeprovisionTenantActivityName},
 		{fn: deprovision.MarkTenantDeleted, name: activities.MarkTenantDeletedActivityName},
+		{fn: cancelDelete.RestoreTenantAfterCancel, name: activities.RestoreTenantAfterCancelActivityName},
+		{fn: cancelDelete.MarkTenantDeleteFailed, name: activities.MarkTenantDeleteFailedActivityName},
 		{fn: upgrade.MarkTenantUpgrading, name: activities.MarkTenantUpgradingActivityName},
 		{fn: upgrade.VerifyTenantActive, name: activities.VerifyTenantActiveActivityName},
 		{fn: upgrade.RaiseQuotas, name: activities.RaiseQuotasActivityName},

@@ -99,4 +99,6 @@ export const AUDIT_EVENT_ICONS: Record<string, LucideIcon> = {
   TENANT_RESTORING: RotateCcw,
   TENANT_RESTORED: DatabaseZap,
   TENANT_RESTORE_FAILED: CircleAlert,
+  TENANT_DELETE_CANCELLED: Undo2,
+  TENANT_DELETE_FAILED: CircleAlert,
 };

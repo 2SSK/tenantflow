@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
@@ -14,7 +14,7 @@ import {
   type Tenant,
   type AuditEvent,
 } from "@/lib/types";
-import { ArrowLeft, Loader2, Trash2, Dot, Rocket, DatabaseBackup, RotateCcw } from "lucide-react";
+import { ArrowLeft, Loader2, Trash2, Dot, Rocket, DatabaseBackup, RotateCcw, Undo2 } from "lucide-react";
 
 type Backup = {
   id: number;
@@ -27,7 +27,6 @@ type Backup = {
 
 export default function TenantDetailPage() {
   const { tenantID } = useParams<{ tenantID: string }>();
-  const router = useRouter();
   const { data: session } = useSession();
   const [tenant, setTenant] = useState<Tenant | null>(null);
   const [events, setEvents] = useState<AuditEvent[]>([]);
@@ -35,6 +34,7 @@ export default function TenantDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [upgrading, setUpgrading] = useState(false);
   const [migrating, setMigrating] = useState(false);
   const [backingUp, setBackingUp] = useState(false);
@@ -97,6 +97,19 @@ export default function TenantDetailPage() {
     }
   };
 
+  // Re-fetch the tenant plus its events. Used after starting a soft-delete
+  // (status flips to "deleting" immediately) or cancelling one (flips back),
+  // so the buttons in the header always match the current workflow state.
+  const refetchTenant = async () => {
+    try {
+      const res = await fetch(`/api/tenants/${tenantID}`);
+      if (res.ok) setTenant(await res.json());
+    } catch {
+      // ignore transient refresh failures; the user can reload
+    }
+    await refetchEvents();
+  };
+
   const handleDelete = async () => {
     setDeleting(true);
     try {
@@ -107,11 +120,35 @@ export default function TenantDetailPage() {
         const body = await res.json();
         throw new Error(body.error || `HTTP ${res.status}`);
       }
-      router.push("/dashboard/tenants");
+      // Soft delete: the tenant enters the 30-day grace period (status
+      // "deleting") but is NOT gone yet — stay on the page so the operator can
+      // see the state and use the "Cancel Deletion" button if they change
+      // their mind.
+      await refetchTenant();
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to delete tenant");
       setDeleting(false);
       setConfirmDelete(false);
+    }
+  };
+
+  const handleCancelDelete = async () => {
+    setCancelling(true);
+    try {
+      const res = await fetch(`/api/tenants/${tenantID}/cancel-delete`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const body = await res.json();
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      // The cancel signal is delivered asynchronously; the tenant flips back
+      // to "active" within a moment, so refetch to show it.
+      await refetchTenant();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to cancel deletion");
+    } finally {
+      setCancelling(false);
     }
   };
 
@@ -232,6 +269,12 @@ export default function TenantDetailPage() {
                 {statusConfig?.label ?? tenant.status}
               </Badge>
             </div>
+            {tenant.status === "deleting" && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Soft-deleted — a 30-day grace period is running. Deletion can be
+                cancelled to restore this tenant.
+              </p>
+            )}
             <div className="mt-3 grid gap-4 text-sm sm:grid-cols-3">
               <div>
                 <p className="text-muted-foreground">Created</p>
@@ -302,7 +345,24 @@ export default function TenantDetailPage() {
                   Backup
                 </Button>
               )}
-              {!confirmDelete ? (
+              {!confirmDelete && tenant.status === "deleting" && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={cancelling}
+                  onClick={handleCancelDelete}
+                >
+                  {cancelling ? (
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Undo2 className="mr-1.5 h-3.5 w-3.5" />
+                  )}
+                  Cancel Deletion
+                </Button>
+              )}
+              {!confirmDelete &&
+              tenant.status !== "deleting" &&
+              tenant.status !== "deleted" ? (
                 <Button
                   variant="destructive"
                   size="sm"

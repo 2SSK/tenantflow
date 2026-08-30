@@ -789,8 +789,8 @@ Next.js app in `web/`:
 | 7.1 | Migrate workflow (lock→snapshot→sync→switch→unlock)            | ☑      |
 | 7.2 | Backup workflow with verification (restore→validate→drop temp) | ☑      |
 | 7.3 | Restore workflow                                               | ☑      |
-| 7.4 | Delete workflow (with 30-day timer)                            | ☐      |
-| 7.5 | Endpoints + UI                                                 | ☐      |
+| 7.4 | Delete workflow (with 30-day timer)                            | ☑      |
+| 7.5 | Endpoints + UI                                                 | ☑      |
 
 ### Phase 8 — Chaos & DLQ
 
