@@ -17,6 +17,7 @@ import {
   LayoutDashboard,
   Users,
   Server,
+  ListX,
   LogOut,
   Sun,
   Moon,
@@ -27,6 +28,7 @@ import {
 const navItems = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
   { href: "/dashboard/tenants", label: "Tenants", icon: Server },
+  { href: "/dashboard/failed-runs", label: "Failed Runs", icon: ListX },
 ];
 
 function ThemeToggle({ collapsed }: { collapsed: boolean }) {

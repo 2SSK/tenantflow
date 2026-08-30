@@ -37,6 +37,21 @@ export type AuditEvent = {
   CreatedAt: string;
 };
 
+// A failed workflow-instance mirror held in the dead letter queue.
+export type FailedRun = {
+  tenantID: string;
+  workflowType: string;
+  workflowID: string;
+  runID: string;
+  errorMessage?: string;
+  startedAt: string;
+  finishedAt?: string;
+};
+
+export type ListFailedRunsResponse = {
+  runs: FailedRun[];
+};
+
 export type KcUser = {
   id: string;
   username: string;
@@ -101,4 +116,5 @@ export const AUDIT_EVENT_ICONS: Record<string, LucideIcon> = {
   TENANT_RESTORE_FAILED: CircleAlert,
   TENANT_DELETE_CANCELLED: Undo2,
   TENANT_DELETE_FAILED: CircleAlert,
+  TENANT_REPROVISION_REQUESTED: RefreshCw,
 };

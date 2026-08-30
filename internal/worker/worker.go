@@ -6,13 +6,16 @@ import (
 
 	"github.com/2SSK/tenantflow/internal/activities"
 	"github.com/2SSK/tenantflow/internal/billing"
+	"github.com/2SSK/tenantflow/internal/chaos"
 	"github.com/2SSK/tenantflow/internal/cloud"
 	"github.com/2SSK/tenantflow/internal/identity"
+	"github.com/2SSK/tenantflow/internal/instance"
 	"github.com/2SSK/tenantflow/internal/repository"
 	"github.com/2SSK/tenantflow/internal/temporal"
 	tfworkflow "github.com/2SSK/tenantflow/internal/workflow"
 
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/interceptor"
 	sdkworker "go.temporal.io/sdk/worker"
 )
 
@@ -26,7 +29,7 @@ type activityRegistration struct {
 	name string
 }
 
-func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, auditRepo repository.AuditRepository, backupRepo repository.BackupRepository, provider cloud.CloudProvider, identityProvider identity.IdentityProvider, log *slog.Logger) *Worker {
+func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, auditRepo repository.AuditRepository, backupRepo repository.BackupRepository, provider cloud.CloudProvider, identityProvider identity.IdentityProvider, instanceRepo repository.WorkflowInstanceRepository, chaosCtrl *chaos.Controller, log *slog.Logger) *Worker {
 	provision := activities.NewProvisionActivities(repo, auditRepo, provider)
 	deprovision := activities.NewDeprovisionActivities(repo, auditRepo)
 	cancelDelete := activities.NewCancelDeleteActivities(repo, auditRepo)
@@ -37,7 +40,17 @@ func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, auditRe
 	backup := activities.NewBackupActivities(backupRepo, auditRepo, provider)
 	restore := activities.NewRestoreActivities(backupRepo, auditRepo, provider)
 
-	sdk := sdkworker.New(tc.Client, tfworkflow.TaskQueue, sdkworker.Options{})
+	// Interceptor order matters: the instance recorder is OUTERMOST so it
+	// observes failures injected by the chaos interceptor (next in the chain).
+	interceptors := []interceptor.WorkerInterceptor{
+		instance.NewRecorder(instanceRepo, log),
+	}
+	if chaosCtrl != nil {
+		interceptors = append(interceptors, &chaos.Interceptor{Controller: chaosCtrl, Log: log})
+	}
+	sdk := sdkworker.New(tc.Client, tfworkflow.TaskQueue, sdkworker.Options{
+		Interceptors: interceptors,
+	})
 
 	registerWorkflows(sdk, []any{
 		tfworkflow.ProvisionTenantWorkflow,

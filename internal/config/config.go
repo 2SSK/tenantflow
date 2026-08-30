@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 )
 
 // Config holds all runtime settings for the API.
@@ -23,6 +24,19 @@ type Config struct {
 	// Keycloak admin credentials (for user management, not API auth)
 	KeycloakAdminUser string
 	KeycloakAdminPass string
+
+	// Chaos controls the worker's failure-injection switch (Phase 8).
+	Chaos ChaosConfig
+}
+
+// ChaosConfig configures deliberate activity failure injection.
+// With Rate 0 the worker never injects failures and the interceptor is a no-op.
+type ChaosConfig struct {
+	// Rate is the probability (0..1) that an eligible activity call fails.
+	Rate float64
+	// Activities restricts chaos to these activity type names.
+	// Empty means chaos applies to every activity.
+	Activities []string
 }
 
 // Load reads configuration from the process environment.
@@ -55,6 +69,22 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("TENANTFLOW_ENV must be development or production, got %q", cfg.Env)
 	}
 
+	chaosRate := 0.0
+	if s := os.Getenv("TENANTFLOW_CHAOS_RATE"); s != "" {
+		f, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return Config{}, fmt.Errorf("TENANTFLOW_CHAOS_RATE must be a number: %w", err)
+		}
+		if f < 0 || f > 1 {
+			return Config{}, fmt.Errorf("TENANTFLOW_CHAOS_RATE must be between 0 and 1, got %v", f)
+		}
+		chaosRate = f
+	}
+	cfg.Chaos = ChaosConfig{
+		Rate:       chaosRate,
+		Activities: splitList(os.Getenv("TENANTFLOW_CHAOS_ACTIVITIES")),
+	}
+
 	return cfg, nil
 }
 
@@ -64,6 +94,17 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// splitList splits a comma-separated string into trimmed, non-empty entries.
+func splitList(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // getEnvInt is getEnv for integers.

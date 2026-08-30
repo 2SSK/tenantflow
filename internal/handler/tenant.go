@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"go.temporal.io/api/enums/v1"
@@ -30,6 +31,7 @@ type TenantStore interface {
 }
 
 type AuditStore interface {
+	WriteEvent(ctx context.Context, event *model.AuditEvent) error
 	ListEvents(ctx context.Context, tenantID string) ([]model.AuditEvent, error)
 }
 
@@ -38,22 +40,30 @@ type BackupStore interface {
 	ListBackups(ctx context.Context, tenantID string) ([]model.Backup, error)
 }
 
+// FailedRunStore lists the dead letter queue — durable workflow-instance
+// mirrors of failed runs.
+type FailedRunStore interface {
+	ListFailed(ctx context.Context, limit int) ([]model.WorkflowInstance, error)
+}
+
 // TenantHandler handles /api/v1/tenants endpoints.
 type TenantHandler struct {
 	temporal    WorkflowStarter
 	store       TenantStore
 	auditStore  AuditStore
 	backupStore BackupStore
+	failedRuns  FailedRunStore
 	log         *slog.Logger
 }
 
 // NewTenantHandler wires a TenantHandler with its dependencies.
-func NewTenantHandler(tc WorkflowStarter, store TenantStore, auditStore AuditStore, backupStore BackupStore, log *slog.Logger) *TenantHandler {
+func NewTenantHandler(tc WorkflowStarter, store TenantStore, auditStore AuditStore, backupStore BackupStore, failedRuns FailedRunStore, log *slog.Logger) *TenantHandler {
 	return &TenantHandler{
 		temporal:    tc,
 		store:       store,
 		auditStore:  auditStore,
 		backupStore: backupStore,
+		failedRuns:  failedRuns,
 		log:         log,
 	}
 }
@@ -649,4 +659,131 @@ func (h *TenantHandler) ListBackups(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// FailedRunResponse is one entry of the dead letter queue as served to clients.
+type FailedRunResponse struct {
+	TenantID     string     `json:"tenantID"`
+	WorkflowType string     `json:"workflowType"`
+	WorkflowID   string     `json:"workflowID"`
+	RunID        string     `json:"runID"`
+	ErrorMessage string     `json:"errorMessage,omitempty"`
+	StartedAt    time.Time  `json:"startedAt"`
+	FinishedAt   *time.Time `json:"finishedAt,omitempty"`
+}
+
+// ListFailedRunsResponse is returned by GET /api/v1/failed-runs.
+type ListFailedRunsResponse struct {
+	Runs []FailedRunResponse `json:"runs"`
+}
+
+// ListFailedRuns handles GET /api/v1/failed-runs — the dead letter queue:
+// durable workflow-instance mirrors of failed runs, most recent first.
+func (h *TenantHandler) ListFailedRuns(w http.ResponseWriter, r *http.Request) {
+	limit := 50
+	if s := r.URL.Query().Get("limit"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 100 {
+			limit = n
+		}
+	}
+
+	instances, err := h.failedRuns.ListFailed(r.Context(), limit)
+	if err != nil {
+		h.log.Error("list failed runs", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to list failed runs")
+		return
+	}
+
+	runs := make([]FailedRunResponse, 0, len(instances))
+	for _, inst := range instances {
+		errMsg := ""
+		if inst.Error != nil {
+			errMsg = *inst.Error
+		}
+		runs = append(runs, FailedRunResponse{
+			TenantID:     inst.TenantID,
+			WorkflowType: inst.WorkflowType,
+			WorkflowID:   inst.WorkflowID,
+			RunID:        inst.RunID,
+			ErrorMessage: errMsg,
+			StartedAt:    inst.StartedAt,
+			FinishedAt:   inst.FinishedAt,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, ListFailedRunsResponse{Runs: runs})
+}
+
+// RetryTenantResponse is returned with HTTP 202 Accepted when a failed tenant
+// has been re-submitted for provisioning (a manual DLQ replay).
+type RetryTenantResponse struct {
+	TenantID   string `json:"tenantID"`
+	WorkflowID string `json:"workflowID"`
+	RunID      string `json:"runID"`
+	Message    string `json:"message"`
+}
+
+// RetryTenant handles POST /api/v1/tenants/{tenantID}/retry.
+//
+// It restarts the provisioning workflow for a tenant left in the 'failed'
+// state, reusing the same workflow ID (allowed once the previous run is
+// closed, which a failed run is). The manual replay is recorded in the audit
+// stream so the recovery is traceable.
+func (h *TenantHandler) RetryTenant(w http.ResponseWriter, r *http.Request) {
+	tenantID := r.PathValue("tenantID")
+
+	tenant, err := h.store.GetTenant(r.Context(), tenantID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "tenant not found")
+			return
+		}
+		h.log.Error("load tenant for retry", "tenantID", tenantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to load tenant")
+		return
+	}
+
+	// The DLQ manual-replay story only makes sense for tenants the saga
+	// actually left failed; everything else has a different recovery path.
+	if tenant.Status != model.TenantStatusFailed {
+		writeError(w, http.StatusConflict, "only failed tenants can be retried")
+		return
+	}
+
+	workflowID := "provision-" + tenantID
+	run, err := h.temporal.ExecuteWorkflow(r.Context(), client.StartWorkflowOptions{
+		ID:                                       workflowID,
+		TaskQueue:                                tfworkflow.TaskQueue,
+		WorkflowIDReusePolicy:                    enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
+		WorkflowExecutionErrorWhenAlreadyStarted: true,
+	}, tfworkflow.ProvisionTenantWorkflow, tfworkflow.ProvisionInput{
+		TenantID:      tenantID,
+		IsolationMode: string(tenant.IsolationMode),
+	})
+	if err != nil {
+		h.log.Error("retry provision workflow", "tenantID", tenantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to restart provisioning workflow")
+		return
+	}
+
+	// Record the manual replay. The actor is the fixed role that may call
+	// this endpoint (actor identity is not yet plumbed into the request).
+	if err := h.auditStore.WriteEvent(r.Context(), &model.AuditEvent{
+		TenantID:   tenantID,
+		WorkflowID: &workflowID,
+		EventType:  model.AuditEventTenantReprovisionReq,
+		Actor:      "platform-admin",
+		Payload:    map[string]any{"runID": run.GetRunID()},
+	}); err != nil {
+		h.log.Error("record retry audit", "tenantID", tenantID, "error", err)
+	}
+
+	h.log.Info("provision workflow retried", "tenantID", tenantID,
+		"workflowID", run.GetID(), "runID", run.GetRunID())
+	writeJSON(w, http.StatusAccepted, RetryTenantResponse{
+		TenantID:   tenantID,
+		WorkflowID: run.GetID(),
+		RunID:      run.GetRunID(),
+		Message:    "provisioning workflow restarted",
+	})
 }

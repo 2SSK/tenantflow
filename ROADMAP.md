@@ -796,8 +796,8 @@ Next.js app in `web/`:
 
 | #   | Task                                   | Status |
 | --- | -------------------------------------- | ------ |
-| 8.1 | Failure injection config               | ☐      |
-| 8.2 | DLQ: failed-runs view + retry endpoint | ☐      |
+| 8.1 | Failure injection config               | ☑      |
+| 8.2 | DLQ: failed-runs view + retry endpoint | ☑      |
 | 8.3 | Compensation history view              | ☐      |
 | 8.4 | Fail-every-activity test matrix        | ☐      |
 | 8.5 | Workflow versioning demo               | ☐      |

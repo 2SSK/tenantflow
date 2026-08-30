@@ -26,9 +26,11 @@ type App struct {
 	Repo       *repository.PostgresTenantRepository
 	AuditRepo  *repository.PostgresAuditRepository
 	BackupRepo *repository.PostgresBackupRepository
-	Provider   cloud.CloudProvider
-	Auth       *auth.Provider
-	Identity   identity.IdentityProvider
+	// InstanceRepo mirrors workflow executions for the DLQ (failed runs).
+	InstanceRepo *repository.PostgresWorkflowInstanceRepository
+	Provider     cloud.CloudProvider
+	Auth         *auth.Provider
+	Identity     identity.IdentityProvider
 }
 
 func New(ctx context.Context, process string) (*App, error) {
@@ -60,6 +62,7 @@ func New(ctx context.Context, process string) (*App, error) {
 	repo := repository.NewPostgresTenantRepository(db.Pool)
 	auditRepo := repository.NewPostgresAuditRepository(db.Pool)
 	backupRepo := repository.NewPostgresBackupRepository(db.Pool)
+	instanceRepo := repository.NewPostgresWorkflowInstanceRepository(db.Pool)
 
 	provider, err := cloud.NewDockerProvider(log)
 	if err != nil {
@@ -90,16 +93,17 @@ func New(ctx context.Context, process string) (*App, error) {
 	)
 
 	return &App{
-		Config:     cfg,
-		Log:        log,
-		TC:         tc,
-		DB:         db,
-		Repo:       repo,
-		AuditRepo:  auditRepo,
-		BackupRepo: backupRepo,
-		Provider:   provider,
-		Auth:       authProvider,
-		Identity:   keycloakAdmin,
+		Config:       cfg,
+		Log:          log,
+		TC:           tc,
+		DB:           db,
+		Repo:         repo,
+		AuditRepo:    auditRepo,
+		BackupRepo:   backupRepo,
+		InstanceRepo: instanceRepo,
+		Provider:     provider,
+		Auth:         authProvider,
+		Identity:     keycloakAdmin,
 	}, nil
 }
 

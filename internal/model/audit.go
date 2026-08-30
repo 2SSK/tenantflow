@@ -27,6 +27,7 @@ const (
 	AuditEventTenantRestoreFailed   AuditEventType = "TENANT_RESTORE_FAILED"
 	AuditEventTenantDeleteCancelled AuditEventType = "TENANT_DELETE_CANCELLED"
 	AuditEventTenantDeleteFailed    AuditEventType = "TENANT_DELETE_FAILED"
+	AuditEventTenantReprovisionReq  AuditEventType = "TENANT_REPROVISION_REQUESTED"
 )
 
 type AuditEvent struct {

@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/2SSK/tenantflow/internal/app"
+	"github.com/2SSK/tenantflow/internal/chaos"
 	tfworker "github.com/2SSK/tenantflow/internal/worker"
 )
 
@@ -25,7 +26,9 @@ func run() error {
 	}
 	defer a.Close()
 
-	w := tfworker.New(a.TC, a.Repo, a.AuditRepo, a.BackupRepo, a.Provider, a.Identity, a.Log)
+	w := tfworker.New(a.TC, a.Repo, a.AuditRepo, a.BackupRepo, a.Provider, a.Identity,
+		a.InstanceRepo,
+		chaos.NewController(a.Config.Chaos.Rate, a.Config.Chaos.Activities), a.Log)
 
 	return w.Run()
 }

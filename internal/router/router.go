@@ -8,13 +8,13 @@ import (
 	"github.com/2SSK/tenantflow/internal/handler"
 )
 
-func New(tc handler.WorkflowStarter, store handler.TenantStore, auditStore handler.AuditStore, backupStore handler.BackupStore, authProvider *auth.Provider, log *slog.Logger) *http.ServeMux {
+func New(tc handler.WorkflowStarter, store handler.TenantStore, auditStore handler.AuditStore, backupStore handler.BackupStore, failedRuns handler.FailedRunStore, authProvider *auth.Provider, log *slog.Logger) *http.ServeMux {
 	root := http.NewServeMux()
 
 	// Public endpoints
 	root.HandleFunc("GET /status", handler.Status)
 
-	tenants := handler.NewTenantHandler(tc, store, auditStore, backupStore, log)
+	tenants := handler.NewTenantHandler(tc, store, auditStore, backupStore, failedRuns, log)
 
 	// Read-only API routes — no auth required
 	root.HandleFunc("GET /api/v1/tenants", tenants.ListTenants)
@@ -31,6 +31,9 @@ func New(tc handler.WorkflowStarter, store handler.TenantStore, auditStore handl
 	protected.Handle("POST /api/v1/tenants/{tenantID}/migrate", auth.RequireRole("platform-admin", http.HandlerFunc(tenants.MigrateTenant)))
 	protected.Handle("POST /api/v1/tenants/{tenantID}/backup", auth.RequireRole("platform-admin", http.HandlerFunc(tenants.BackupTenant)))
 	protected.Handle("POST /api/v1/tenants/{tenantID}/restore", auth.RequireRole("platform-admin", http.HandlerFunc(tenants.RestoreTenant)))
+	// DLQ + recovery routes — require authentication + role
+	protected.Handle("GET /api/v1/failed-runs", auth.RequireRole("platform-admin", http.HandlerFunc(tenants.ListFailedRuns)))
+	protected.Handle("POST /api/v1/tenants/{tenantID}/retry", auth.RequireRole("platform-admin", http.HandlerFunc(tenants.RetryTenant)))
 	root.Handle("/api/", auth.RequireAuth(authProvider, protected))
 
 	return root

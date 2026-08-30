@@ -40,6 +40,7 @@ export default function TenantDetailPage() {
   const [backingUp, setBackingUp] = useState(false);
   const [restoringID, setRestoringID] = useState<number | null>(null);
   const [backups, setBackups] = useState<Backup[]>([]);
+  const [retrying, setRetrying] = useState(false);
 
   const isAdmin = session?.user?.realmRoles?.includes("platform-admin");
 
@@ -149,6 +150,28 @@ export default function TenantDetailPage() {
       alert(err instanceof Error ? err.message : "Failed to cancel deletion");
     } finally {
       setCancelling(false);
+    }
+  };
+
+  // Replay provisioning for a tenant the saga left in the failed state.
+  // Mirrors the DLQ "Retry" action but surfaced on the tenant page itself.
+  const handleRetry = async () => {
+    setRetrying(true);
+    try {
+      const res = await fetch(`/api/tenants/${tenantID}/retry`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const body = await res.json();
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      // The workflow restarts asynchronously; the tenant flips back to
+      // "provisioning" within a moment, so refetch to show it.
+      await refetchTenant();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to retry tenant");
+    } finally {
+      setRetrying(false);
     }
   };
 
@@ -275,6 +298,12 @@ export default function TenantDetailPage() {
                 cancelled to restore this tenant.
               </p>
             )}
+            {tenant.status === "failed" && (
+              <p className="mt-1 text-xs text-destructive">
+                Provisioning failed and the run landed in the dead letter queue.
+                Retry it to replay provisioning.
+              </p>
+            )}
             <div className="mt-3 grid gap-4 text-sm sm:grid-cols-3">
               <div>
                 <p className="text-muted-foreground">Created</p>
@@ -358,6 +387,21 @@ export default function TenantDetailPage() {
                     <Undo2 className="mr-1.5 h-3.5 w-3.5" />
                   )}
                   Cancel Deletion
+                </Button>
+              )}
+              {!confirmDelete && tenant.status === "failed" && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={retrying}
+                  onClick={handleRetry}
+                >
+                  {retrying ? (
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+                  )}
+                  Retry Provisioning
                 </Button>
               )}
               {!confirmDelete &&

@@ -37,11 +37,29 @@ type stubTenantStore struct {
 	err     error
 }
 
-type stubAuditStore struct{}
+type stubAuditStore struct {
+	events []model.AuditEvent
+}
+
+func (s *stubAuditStore) WriteEvent(ctx context.Context, event *model.AuditEvent) error {
+	s.events = append(s.events, *event)
+	return nil
+}
 
 type stubBackupStore struct {
 	backups []model.Backup
 	err     error
+}
+
+type stubFailedRunStore struct {
+	instances []model.WorkflowInstance
+	err       error
+	lastLimit int
+}
+
+func (s *stubFailedRunStore) ListFailed(ctx context.Context, limit int) ([]model.WorkflowInstance, error) {
+	s.lastLimit = limit
+	return s.instances, s.err
 }
 
 func (s *stubBackupStore) ListBackups(ctx context.Context, tenantID string) ([]model.Backup, error) {
@@ -82,7 +100,7 @@ func (s *stubTenantStore) ListTenants(ctx context.Context) ([]model.Tenant, erro
 }
 
 func newTestTenantHandler(s *stubWorkflowStarter, store TenantStore) *TenantHandler {
-	return NewTenantHandler(s, store, &stubAuditStore{}, &stubBackupStore{}, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	return NewTenantHandler(s, store, &stubAuditStore{}, &stubBackupStore{}, &stubFailedRunStore{}, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
 }
 
 func TestCreateTenatAccept(t *testing.T) {
@@ -663,7 +681,7 @@ func TestListBackups(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			stub := &stubWorkflowStarter{}
 			bs := &stubBackupStore{backups: backups, err: tt.store.err}
-			h := NewTenantHandler(stub, tt.store, &stubAuditStore{}, bs, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+			h := NewTenantHandler(stub, tt.store, &stubAuditStore{}, bs, &stubFailedRunStore{}, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants/acme/backups", nil)
 			req.SetPathValue("tenantID", "acme")
@@ -769,4 +787,166 @@ func TestRestoreTenant(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRetryTenant(t *testing.T) {
+	failedTenant := &model.Tenant{TenantID: "acme", Status: model.TenantStatusFailed, IsolationMode: model.IsolationModeDedicated}
+	activeTenant := &model.Tenant{TenantID: "acme", Status: model.TenantStatusActive}
+
+	tests := []struct {
+		name       string
+		tenant     *model.Tenant
+		storeErr   error
+		startErr   error
+		wantStatus int
+		wantBody   string
+		started    bool
+	}{
+		{
+			name:       "starts provisioning for a failed tenant",
+			tenant:     failedTenant,
+			wantStatus: http.StatusAccepted,
+			wantBody:   `"workflowID":"provision-acme"`,
+			started:    true,
+		},
+		{
+			name:       "conflict when tenant is not failed",
+			tenant:     activeTenant,
+			wantStatus: http.StatusConflict,
+			wantBody:   "only failed tenants can be retried",
+			started:    false,
+		},
+		{
+			name:       "not found",
+			storeErr:   repository.ErrNotFound,
+			wantStatus: http.StatusNotFound,
+			wantBody:   "tenant not found",
+			started:    false,
+		},
+		{
+			name:       "workflow start error",
+			tenant:     failedTenant,
+			startErr:   errors.New("temporal down"),
+			wantStatus: http.StatusInternalServerError,
+			wantBody:   "failed to restart provisioning workflow",
+			started:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stub := &stubWorkflowStarter{err: tt.startErr}
+			audit := &stubAuditStore{}
+			h := NewTenantHandler(stub, &stubTenantStore{tenant: tt.tenant, err: tt.storeErr}, audit, &stubBackupStore{}, &stubFailedRunStore{}, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/tenants/acme/retry", nil)
+			req.SetPathValue("tenantID", "acme")
+			rec := httptest.NewRecorder()
+
+			h.RetryTenant(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if tt.wantBody != "" && !strings.Contains(rec.Body.String(), tt.wantBody) {
+				t.Errorf("body = %q, want to contain %q", rec.Body.String(), tt.wantBody)
+			}
+			workflowStarted := stub.startedOptions.ID != ""
+			if workflowStarted != tt.started {
+				t.Errorf("workflow started = %v, want %v", workflowStarted, tt.started)
+			}
+			if tt.started && tt.startErr == nil {
+				if stub.startedOptions.ID != "provision-acme" {
+					t.Errorf("workflow ID = %q, want provision-acme", stub.startedOptions.ID)
+				}
+				if stub.startedOptions.WorkflowIDReusePolicy != enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE {
+					t.Errorf("reuse policy = %v, want ALLOW_DUPLICATE", stub.startedOptions.WorkflowIDReusePolicy)
+				}
+				if len(audit.events) != 1 || audit.events[0].EventType != model.AuditEventTenantReprovisionReq {
+					t.Errorf("expected TENANT_REPROVISION_REQUESTED audit event, got %+v", audit.events)
+				}
+			}
+		})
+	}
+}
+
+func TestListFailedRuns(t *testing.T) {
+	now := time.Now()
+	msg := "chaos injection: simulated failure"
+	tests := []struct {
+		name       string
+		instances  []model.WorkflowInstance
+		storeErr   error
+		query      string
+		wantLimit  int
+		wantStatus int
+		wantBody   string
+	}{
+		{
+			name: "lists failed runs",
+			instances: []model.WorkflowInstance{{
+				TenantID:     "acme",
+				WorkflowType: "ProvisionTenantWorkflow",
+				WorkflowID:   "provision-acme",
+				RunID:        "run-1",
+				Status:       "failed",
+				Error:        &msg,
+				StartedAt:    now,
+				FinishedAt:   &now,
+			}},
+			wantLimit:  50,
+			wantStatus: http.StatusOK,
+			wantBody:   `"tenantID":"acme"`,
+		},
+		{
+			name:       "honors small limit and returns empty list",
+			query:      "limit=3",
+			wantLimit:  3,
+			wantStatus: http.StatusOK,
+			wantBody:   `"runs":[]`,
+		},
+		{
+			name:       "rejects oversized limit with default",
+			query:      "limit=9999",
+			wantLimit:  50,
+			wantStatus: http.StatusOK,
+			wantBody:   `"runs":[]`,
+		},
+		{
+			name:       "store error",
+			storeErr:   errors.New("db down"),
+			wantLimit:  50,
+			wantStatus: http.StatusInternalServerError,
+			wantBody:   "failed to list failed runs",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &stubFailedRunStore{instances: tt.instances, err: tt.storeErr}
+			h := NewTenantHandler(&stubWorkflowStarter{}, &stubTenantStore{}, &stubAuditStore{}, &stubBackupStore{}, store, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/failed-runs"+optionalQuery(tt.query), nil)
+			rec := httptest.NewRecorder()
+
+			h.ListFailedRuns(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if tt.wantBody != "" && !strings.Contains(rec.Body.String(), tt.wantBody) {
+				t.Errorf("body = %q, want to contain %q", rec.Body.String(), tt.wantBody)
+			}
+			if store.lastLimit != tt.wantLimit {
+				t.Errorf("limit passed to store = %d, want %d", store.lastLimit, tt.wantLimit)
+			}
+		})
+	}
+}
+
+func optionalQuery(q string) string {
+	if q == "" {
+		return ""
+	}
+	return "?" + q
 }
