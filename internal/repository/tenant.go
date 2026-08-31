@@ -3,19 +3,33 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/2SSK/tenantflow/internal/model"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-var ErrNotFound = errors.New("tenant not found")
+var (
+	ErrNotFound = errors.New("tenant not found")
+	// ErrStatusConflict reports a compare-and-swap that found the tenant in a
+	// state other than the legal source states: a concurrent lifecycle
+	// workflow moved it first. The caller must NOT blindly overwrite the
+	// status — it lost the race.
+	ErrStatusConflict = errors.New("tenant status conflict")
+)
 
 type TenantRepository interface {
 	CreateTenant(ctx context.Context, t *model.Tenant) error
 	GetTenant(ctx context.Context, tenantID string) (*model.Tenant, error)
 	ListTenants(ctx context.Context) ([]model.Tenant, error)
-	UpdateTenantStatus(ctx context.Context, tenantID string, status model.TenantStatus) error
+	// UpdateTenantStatusFrom atomically transitions the tenant's status. The
+	// UPDATE only takes effect when the tenant's current status is one of
+	// allowedFrom; otherwise it returns ErrStatusConflict and the status is
+	// left untouched. This makes the tenant status a real state machine: every
+	// transition is guarded, so concurrent workflows (e.g. provision racing
+	// delete) can never clobber each other's writes.
+	UpdateTenantStatusFrom(ctx context.Context, tenantID string, status model.TenantStatus, allowedFrom ...model.TenantStatus) error
 }
 
 type PostgresTenantRepository struct {
@@ -52,13 +66,27 @@ func (r *PostgresTenantRepository) GetTenant(ctx context.Context, tenantID strin
 	return t, nil
 }
 
-func (r *PostgresTenantRepository) UpdateTenantStatus(ctx context.Context, tenantID string, status model.TenantStatus) error {
-	_, err := r.pool.Exec(ctx, `
+// UpdateTenantStatusFrom is the atomic status transition: the UPDATE carries
+// the source-state guard in SQL, so the database — not the application — is
+// the arbiter of the state machine. 0 rows affected means the tenant's
+// current status was not an allowed source, i.e. a concurrent workflow won.
+func (r *PostgresTenantRepository) UpdateTenantStatusFrom(ctx context.Context, tenantID string, status model.TenantStatus, allowedFrom ...model.TenantStatus) error {
+	from := make([]string, len(allowedFrom))
+	for i, s := range allowedFrom {
+		from[i] = string(s)
+	}
+	res, err := r.pool.Exec(ctx, `
 	UPDATE tenants
 	SET status = $2, updated_at = now()
-	WHERE tenant_id = $1`,
-		tenantID, status)
-	return err
+	WHERE tenant_id = $1 AND status = ANY($3)`,
+		tenantID, string(status), from)
+	if err != nil {
+		return fmt.Errorf("transition tenant %s to %s: %w", tenantID, status, err)
+	}
+	if res.RowsAffected() == 0 {
+		return ErrStatusConflict
+	}
+	return nil
 }
 
 func (r *PostgresTenantRepository) ListTenants(ctx context.Context) ([]model.Tenant, error) {

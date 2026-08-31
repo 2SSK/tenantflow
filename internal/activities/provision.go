@@ -2,6 +2,7 @@ package activities
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/2SSK/tenantflow/internal/model"
 	"github.com/2SSK/tenantflow/internal/repository"
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/temporal"
 )
 
 const (
@@ -83,7 +85,17 @@ func (a *ProvisionActivities) ProvisionTenant(ctx context.Context, tenantID stri
 func (a *ProvisionActivities) MarkTenantActive(ctx context.Context, tenantID string) error {
 	activity.GetLogger(ctx).Info("Marking tenant active", "tenantID", tenantID)
 
-	if err := a.repo.UpdateTenantStatus(ctx, tenantID, model.TenantStatusActive); err != nil {
+	// Active is entered from "provisioning" (fresh provision) or "failed"
+	// (the retry endpoint restarts the same workflow on a failed tenant —
+	// CreateTenantRecord is a no-op then, so the status is still "failed").
+	// Crucially "deleting" is NOT a legal source: if a delete workflow won
+	// the race, this CAS fails and the provision workflow surfaces in the DLQ
+	// instead of clobbering the delete back to active.
+	if err := a.repo.UpdateTenantStatusFrom(ctx, tenantID, model.TenantStatusActive,
+		model.TenantStatusProvisioning, model.TenantStatusFailed); err != nil {
+		if errors.Is(err, repository.ErrStatusConflict) {
+			return temporal.NewNonRetryableApplicationError("mark tenant "+tenantID+" active", "StatusConflict", err)
+		}
 		return fmt.Errorf("mark tenant %s active: %w", tenantID, err)
 	}
 
@@ -98,7 +110,15 @@ func (a *ProvisionActivities) MarkTenantActive(ctx context.Context, tenantID str
 func (a *ProvisionActivities) MarkTenantFailed(ctx context.Context, tenantID string) error {
 	activity.GetLogger(ctx).Info("Marking tenant failed (saga compensation)", "tenantID", tenantID)
 
-	if err := a.repo.UpdateTenantStatus(ctx, tenantID, model.TenantStatusFailed); err != nil {
+	// Saga compensation: from "provisioning" on a fresh failure, or from
+	// "failed" when a retried provision fails again. If a delete won the race
+	// meanwhile, the CAS fails loudly instead of resurrecting a tenant that
+	// is being torn down.
+	if err := a.repo.UpdateTenantStatusFrom(ctx, tenantID, model.TenantStatusFailed,
+		model.TenantStatusProvisioning, model.TenantStatusFailed); err != nil {
+		if errors.Is(err, repository.ErrStatusConflict) {
+			return temporal.NewNonRetryableApplicationError("mark tenant "+tenantID+" failed", "StatusConflict", err)
+		}
 		return fmt.Errorf("mark tenant %s failed: %w", tenantID, err)
 	}
 	return a.auditRepo.WriteEvent(ctx, &model.AuditEvent{

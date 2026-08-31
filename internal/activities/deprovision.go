@@ -2,12 +2,14 @@ package activities
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/2SSK/tenantflow/internal/model"
 	"github.com/2SSK/tenantflow/internal/repository"
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/temporal"
 )
 
 const (
@@ -28,7 +30,15 @@ func NewDeprovisionActivities(repo repository.TenantRepository, auditRepo reposi
 func (a *DeprovisionActivities) MarkTenantDeleting(ctx context.Context, tenantID string) error {
 	activity.GetLogger(ctx).Info("Marking tenant deleting", "tenantID", tenantID)
 
-	if err := a.repo.UpdateTenantStatus(ctx, tenantID, model.TenantStatusDeleting); err != nil {
+	// Deletion may only ENTER "deleting" from a stable state. If a concurrent
+	// lifecycle workflow (e.g. provision) won the race, the CAS fails. The
+	// conflict is non-retryable: the status will not change back on its own,
+	// so retrying would only pump three identical failures into the DLQ.
+	if err := a.repo.UpdateTenantStatusFrom(ctx, tenantID, model.TenantStatusDeleting,
+		model.TenantStatusActive, model.TenantStatusFailed); err != nil {
+		if errors.Is(err, repository.ErrStatusConflict) {
+			return temporal.NewNonRetryableApplicationError("mark tenant "+tenantID+" deleting", "StatusConflict", err)
+		}
 		return err
 	}
 
@@ -56,7 +66,13 @@ func (a *DeprovisionActivities) DeprovisionTenant(ctx context.Context, tenantID 
 func (a *DeprovisionActivities) MarkTenantDeleted(ctx context.Context, tenantID string) error {
 	activity.GetLogger(ctx).Info("Marking tenant deleted", "tenantID", tenantID)
 
-	if err := a.repo.UpdateTenantStatus(ctx, tenantID, model.TenantStatusDeleted); err != nil {
+	// Teardown may only finish from "deleting". A fresh DELETE on an already
+	// deleted tenant fails here instead of silently succeeding — the DLQ
+	// surfaces the anomaly for the operator.
+	if err := a.repo.UpdateTenantStatusFrom(ctx, tenantID, model.TenantStatusDeleted, model.TenantStatusDeleting); err != nil {
+		if errors.Is(err, repository.ErrStatusConflict) {
+			return temporal.NewNonRetryableApplicationError("mark tenant "+tenantID+" deleted", "StatusConflict", err)
+		}
 		return fmt.Errorf("mark tenant %s deleted: %w", tenantID, err)
 	}
 

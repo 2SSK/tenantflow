@@ -111,19 +111,21 @@ func TestGetTenantNotFound(t *testing.T) {
 	}
 }
 
-func TestUpdateTenantStatus(t *testing.T) {
+func TestUpdateTenantStatusFrom(t *testing.T) {
 	pool := testPool(t)
 	repo := NewPostgresTenantRepository(pool)
 	ctx := context.Background()
 
-	id := uniqueTenantID("test-update")
+	id := uniqueTenantID("test-cas-happy")
 	ten := &model.Tenant{TenantID: id, Status: model.TenantStatusProvisioning}
 	if err := repo.CreateTenant(ctx, ten); err != nil {
 		t.Fatalf("CreateTenant: %v", err)
 	}
 
-	if err := repo.UpdateTenantStatus(ctx, id, model.TenantStatusActive); err != nil {
-		t.Fatalf("UpdateTenantStatus: %v", err)
+	// provisioning -> active is the legal happy path (MarkTenantActive).
+	if err := repo.UpdateTenantStatusFrom(ctx, id, model.TenantStatusActive,
+		model.TenantStatusProvisioning, model.TenantStatusFailed); err != nil {
+		t.Fatalf("UpdateTenantStatusFrom: %v", err)
 	}
 
 	got, err := repo.GetTenant(ctx, id)
@@ -136,5 +138,36 @@ func TestUpdateTenantStatus(t *testing.T) {
 
 	if got.UpdatedAt.Before(got.CreatedAt) {
 		t.Errorf("UpdatedAt %v is before CreatedAt %v; the UPDATE should maintain updated_at", got.UpdatedAt, got.CreatedAt)
+	}
+}
+
+func TestUpdateTenantStatusFromRejectsIllegalSource(t *testing.T) {
+	pool := testPool(t)
+	repo := NewPostgresTenantRepository(pool)
+	ctx := context.Background()
+
+	id := uniqueTenantID("test-cas-conflict")
+	ten := &model.Tenant{TenantID: id, Status: model.TenantStatusProvisioning}
+	if err := repo.CreateTenant(ctx, ten); err != nil {
+		t.Fatalf("CreateTenant: %v", err)
+	}
+
+	// "deleting" may only be entered from active|failed — a provisioning
+	// tenant is an illegal source. This is precisely the create/delete race
+	// the guard is meant to close, now enforced by the database itself.
+	err := repo.UpdateTenantStatusFrom(ctx, id, model.TenantStatusDeleting,
+		model.TenantStatusActive, model.TenantStatusFailed)
+	if !errors.Is(err, ErrStatusConflict) {
+		t.Fatalf("err = %v, want ErrStatusConflict", err)
+	}
+
+	// The rejected CAS must not have partially applied: status is untouched.
+	got, err := repo.GetTenant(ctx, id)
+	if err != nil {
+		t.Fatalf("GetTenant: %v", err)
+	}
+	if got.Status != model.TenantStatusProvisioning {
+		t.Errorf("Status = %q, want %q (conflict must not write)",
+			got.Status, model.TenantStatusProvisioning)
 	}
 }

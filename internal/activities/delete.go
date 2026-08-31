@@ -2,10 +2,12 @@ package activities
 
 import (
 	"context"
+	"errors"
 
 	"github.com/2SSK/tenantflow/internal/model"
 	"github.com/2SSK/tenantflow/internal/repository"
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/temporal"
 )
 
 const (
@@ -34,7 +36,13 @@ func NewCancelDeleteActivities(repo repository.TenantRepository, auditRepo repos
 func (a *CancelDeleteActivities) RestoreTenantAfterCancel(ctx context.Context, tenantID string) error {
 	activity.GetLogger(ctx).Info("Restoring tenant after cancelled deletion", "tenantID", tenantID)
 
-	if err := a.repo.UpdateTenantStatus(ctx, tenantID, model.TenantStatusActive); err != nil {
+	// Cancel is only meaningful while the delete is in its grace period, i.e.
+	// the tenant is "deleting". If teardown already finished (or a fresh
+	// delete won), the CAS fails rather than reviving a tenant mid-teardown.
+	if err := a.repo.UpdateTenantStatusFrom(ctx, tenantID, model.TenantStatusActive, model.TenantStatusDeleting); err != nil {
+		if errors.Is(err, repository.ErrStatusConflict) {
+			return temporal.NewNonRetryableApplicationError("restore tenant "+tenantID+" after cancel", "StatusConflict", err)
+		}
 		return err
 	}
 
