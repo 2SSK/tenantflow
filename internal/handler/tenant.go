@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -95,6 +96,17 @@ type TenantResponse struct {
 // within. The workflow receives this via DeleteInput so tests and tooling can
 // pass shorter durations.
 const defaultDeleteGracePeriod = 30 * 24 * time.Hour
+
+// deleteGracePeriod is the soft-delete window the API uses when starting a
+// DeleteTenantWorkflow. TENANTFLOW_DELETE_GRACE_PERIOD overrides the 30-day
+// default (e.g. "60s" for demos and disaster-recovery drills); invalid or
+// non-positive values fall back to the default.
+var deleteGracePeriod = func() time.Duration {
+	if d, err := time.ParseDuration(os.Getenv("TENANTFLOW_DELETE_GRACE_PERIOD")); err == nil && d > 0 {
+		return d
+	}
+	return defaultDeleteGracePeriod
+}()
 
 // DeleteTenantResponse is returned with HTTP 202 Accepted.
 // GracePeriodDays tells the operator how long they have to cancel the deletion.
@@ -296,7 +308,7 @@ func (h *TenantHandler) DeleteTenant(w http.ResponseWriter, r *http.Request) {
 		WorkflowExecutionErrorWhenAlreadyStarted: true,
 	}, tfworkflow.DeleteTenantWorkflow, tfworkflow.DeleteInput{
 		TenantID:    tenantID,
-		GracePeriod: defaultDeleteGracePeriod,
+		GracePeriod: deleteGracePeriod,
 	})
 	if err != nil {
 		var already *serviceerror.WorkflowExecutionAlreadyStarted
@@ -314,7 +326,7 @@ func (h *TenantHandler) DeleteTenant(w http.ResponseWriter, r *http.Request) {
 		TenantID:        tenantID,
 		WorkflowID:      run.GetID(),
 		Status:          string(model.TenantStatusDeleting),
-		GracePeriodDays: int(defaultDeleteGracePeriod.Hours() / 24),
+		GracePeriodDays: int(deleteGracePeriod.Hours() / 24),
 	})
 }
 

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/2SSK/tenantflow/internal/activities"
+	"github.com/2SSK/tenantflow/internal/model"
 	"github.com/stretchr/testify/mock"
 	"go.temporal.io/sdk/testsuite"
 )
@@ -18,8 +19,11 @@ func TestDeleteWorkflow_TimerExpirySucceeds(t *testing.T) {
 
 	env.RegisterActivity(activities.NewDeprovisionActivities(nil, nil))
 	env.RegisterActivity(activities.NewCancelDeleteActivities(nil, nil))
+	env.RegisterActivity(activities.NewBackupActivities(nil, nil, nil))
 
 	env.OnActivity(activities.MarkTenantDeletingActivityName, mock.Anything, "acme-del").Return(nil)
+	// v1 teardown captures a verified pre-delete backup before teardown.
+	env.OnActivity(activities.BackupTenantDataActivityName, mock.Anything, "acme-del").Return(&model.Backup{ID: 7, Filename: "pre-delete.tar.gz"}, nil)
 	env.OnActivity(activities.DeprovisionTenantActivityName, mock.Anything, "acme-del").Return(nil)
 	env.OnActivity(activities.MarkTenantDeletedActivityName, mock.Anything, "acme-del").Return(nil)
 
@@ -86,8 +90,11 @@ func TestDeleteWorkflow_TeardownFailsAfterTimerExpiry(t *testing.T) {
 
 	env.RegisterActivity(activities.NewDeprovisionActivities(nil, nil))
 	env.RegisterActivity(activities.NewCancelDeleteActivities(nil, nil))
+	env.RegisterActivity(activities.NewBackupActivities(nil, nil, nil))
 
 	env.OnActivity(activities.MarkTenantDeletingActivityName, mock.Anything, "acme-del").Return(nil)
+	// v1 teardown captures a verified pre-delete backup before teardown.
+	env.OnActivity(activities.BackupTenantDataActivityName, mock.Anything, "acme-del").Return(&model.Backup{ID: 7, Filename: "pre-delete.tar.gz"}, nil)
 	env.OnActivity(activities.DeprovisionTenantActivityName, mock.Anything, "acme-del").Return(errors.New("teardown boom: connection refused"))
 	env.OnActivity(activities.MarkTenantDeleteFailedActivityName, mock.Anything, "acme-del").Return(nil)
 

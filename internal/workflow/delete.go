@@ -8,6 +8,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"github.com/2SSK/tenantflow/internal/activities"
+	"github.com/2SSK/tenantflow/internal/model"
 )
 
 // CancelDeleteSignalName is the signal an operator sends to stop an in-flight
@@ -20,6 +21,21 @@ type DeleteInput struct {
 	GracePeriod time.Duration
 }
 
+// teardownBackupVersion is the workflow-version marker for the v1 teardown
+// enhancement: capturing a verified pre-delete backup before destroying the
+// tenant's data (a retention-policy requirement).
+//
+// workflow.GetVersion makes this code change compatible with in-flight
+// executions. A deletion started before this code shipped has no marker in
+// its history, so when the new worker replays it GetVersion returns
+// workflow.DefaultVersion and the teardown keeps the OLD behavior — the SDK
+// deliberately tolerates the unmarked branch. Only executions whose first
+// decision runs on v1 code record the marker and take the backup branch.
+// Without the gate, the added ExecuteActivity would be a brand-new command
+// on an old history and the worker would fail the run with
+// NonDeterministicError.
+const teardownBackupVersion workflow.Version = 1
+
 // DeleteTenantWorkflow implements soft delete with a durable grace period:
 //
 //	MarkTenantDeleting (status → "deleting")
@@ -31,6 +47,10 @@ type DeleteInput struct {
 //	DeprovisionTenant        ←──┘   RestoreTenantAfterCancel
 //	        ↓                            (status → "active")
 //	MarkTenantDeleted → "deleted"
+//
+//	v1 teardown (version-gated): a verified pre-delete backup is captured via
+//	BackupTenantData before DeprovisionTenant runs, so a deleted tenant still
+//	leaves a restorable artifact behind.
 //
 // The power of Temporal: the 30-day wait is a *durable timer* recorded in the
 // workflow history, so it survives worker crashes and restarts; and the cancel
@@ -98,6 +118,18 @@ func DeleteTenantWorkflow(ctx workflow.Context, in DeleteInput) (err error) {
 		}
 		logger.Info("DeleteTenantWorkflow cancelled during grace period", "TenantID", in.TenantID, "WorkflowID", workflowID)
 		return nil
+	}
+
+	// ── v1: capture a verified pre-delete backup before any destruction. ──
+	// Gated by GetVersion so deletions started before this shipped keep their
+	// original semantics: their history lacks the marker, so on replay this
+	// returns DefaultVersion and the branch is skipped.
+	if workflow.GetVersion(actCtx, "tf-delete-preteardown-backup", workflow.DefaultVersion, teardownBackupVersion) >= teardownBackupVersion {
+		var preDeleteBackup *model.Backup
+		if err = workflow.ExecuteActivity(actCtx, activities.BackupTenantDataActivityName, in.TenantID).Get(actCtx, &preDeleteBackup); err != nil {
+			return err
+		}
+		logger.Info("teardown v1: pre-delete backup captured", "TenantID", in.TenantID, "BackupID", preDeleteBackup.ID, "Filename", preDeleteBackup.Filename)
 	}
 
 	if err = workflow.ExecuteActivity(actCtx, activities.DeprovisionTenantActivityName, in.TenantID).Get(actCtx, nil); err != nil {
