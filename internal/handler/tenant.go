@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -179,6 +180,15 @@ type ListBackupsResponse struct {
 	Backups []BackupResponse `json:"backups"`
 }
 
+// tenantIDPattern is the tenant-ID fragment of the database identifier the
+// provision step builds ("tenant_" + tenantID). That composed name must be a
+// valid PostgreSQL identifier (letters, digits, underscore, hyphen; max 63
+// bytes), and "tenant_" eats 7 of them. The fragment is validated here so a
+// bad ID fails with a clean 400 at the door instead of dying three retries
+// later inside ProvisionTenant and leaving a failed tenant behind. Keep in
+// sync with cloud.safeID.
+var tenantIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,56}$`)
+
 func (h *TenantHandler) CreateTenant(w http.ResponseWriter, r *http.Request) {
 	var req CreateTenantRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -188,6 +198,10 @@ func (h *TenantHandler) CreateTenant(w http.ResponseWriter, r *http.Request) {
 
 	if req.TenantID == "" {
 		writeError(w, http.StatusBadRequest, "tenantID is required")
+		return
+	}
+	if !tenantIDPattern.MatchString(req.TenantID) {
+		writeError(w, http.StatusBadRequest, "tenantID must match ^[a-zA-Z0-9_-]{1,56}$")
 		return
 	}
 

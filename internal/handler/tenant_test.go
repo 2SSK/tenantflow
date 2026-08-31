@@ -143,6 +143,53 @@ func TestCreateTenatAccept(t *testing.T) {
 	}
 }
 
+func TestCreateTenantRejectsInvalidTenantID(t *testing.T) {
+	ids := []string{
+		"bad.id",                     // a dot breaks tenant_<id> as a Postgres identifier
+		"has space",                  // whitespace
+		"with/slash",                 // path separator
+		`a"; DROP TABLE tenants; --`, // SQL-ish metacharacters
+		strings.Repeat("a", 57),      // 57 chars: "tenant_" prefix would exceed 63
+	}
+
+	for _, id := range ids {
+		t.Run(id, func(t *testing.T) {
+			stub := &stubWorkflowStarter{}
+			h := newTestTenantHandler(stub, &stubTenantStore{})
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/tenants", bytes.NewBufferString(`{"tenantID":"`+id+`"}`))
+			rec := httptest.NewRecorder()
+
+			h.CreateTenant(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400 for tenantID %q, got %d", id, rec.Code)
+			}
+			if len(stub.startedArgs) != 0 {
+				t.Errorf("workflow started for invalid tenantID %q", id)
+			}
+		})
+	}
+}
+
+func TestCreateTenantAcceptsMaxLengthID(t *testing.T) {
+	// 56 chars — exactly the longest tenantID that keeps "tenant_" + id within
+	// PostgreSQL's 63-byte identifier limit.
+	id := strings.Repeat("a", 56)
+
+	stub := &stubWorkflowStarter{}
+	h := newTestTenantHandler(stub, &stubTenantStore{})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tenants", bytes.NewBufferString(`{"tenantID":"`+id+`"}`))
+	rec := httptest.NewRecorder()
+
+	h.CreateTenant(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 for 56-char tenantID, got %d", rec.Code)
+	}
+}
+
 func TestCreateTenantBadJSON(t *testing.T) {
 	stub := &stubWorkflowStarter{}
 	h := newTestTenantHandler(stub, &stubTenantStore{})
