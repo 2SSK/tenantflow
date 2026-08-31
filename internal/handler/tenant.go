@@ -273,6 +273,11 @@ func toTenantResponse(t *model.Tenant) TenantResponse {
 // This starts a soft-delete workflow: the tenant is marked "deleting" and
 // stays that way for the 30-day grace period before teardown. The operator
 // can cancel within that window via POST /api/v1/tenants/{tenantID}/cancel-delete.
+//
+// Delete is only accepted from a stable state: "active" or "failed" (a
+// failed tenant can be deleted as a cleanup operation). Starting a delete
+// while a tenant is still provisioning would race its workflow's status
+// writes and produce a lying status column.
 func (h *TenantHandler) DeleteTenant(w http.ResponseWriter, r *http.Request) {
 	tenantID := r.PathValue("tenantID")
 
@@ -296,6 +301,18 @@ func (h *TenantHandler) DeleteTenant(w http.ResponseWriter, r *http.Request) {
 	}
 	if tenant.Status == model.TenantStatusDeleted {
 		writeError(w, http.StatusConflict, "tenant already deleted")
+		return
+	}
+
+	// Lifecycle guard: DELETE is only legal from a stable state. A tenant that
+	// is still pending/provisioning has a lifecycle workflow running that will
+	// keep writing its status column; starting a delete workflow concurrently
+	// creates a lost-update race where two workflows clobber each other
+	// (observed live: MarkTenantActive overwrote MarkTenantDeleting 230ms
+	// later, so the tenant reported "active" for its whole grace period).
+	// "active" and "failed" are quiescent — nothing else is mutating them.
+	if tenant.Status != model.TenantStatusActive && tenant.Status != model.TenantStatusFailed {
+		writeError(w, http.StatusConflict, "tenant must be active or failed to delete")
 		return
 	}
 

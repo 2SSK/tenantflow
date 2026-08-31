@@ -314,19 +314,36 @@ func TestDeleteTenant(t *testing.T) {
 		Status:     model.TenantStatusActive,
 		WorkflowID: &workflowID,
 	}
+	failed := &model.Tenant{
+		TenantID:   "acme",
+		Status:     model.TenantStatusFailed,
+		WorkflowID: &workflowID,
+	}
 
+	// started asserts whether the handler actually starts a delete workflow.
+	// Guarded statuses must never reach Temporal: a workflow started on a
+	// provisioning tenant is precisely the race we are fixing.
 	tests := []struct {
 		name       string
 		store      *stubTenantStore
 		starterErr error
 		wantStatus int
 		wantBody   string
+		started    bool
 	}{
 		{
-			name:       "accepted",
+			name:       "active tenant accepted",
 			store:      &stubTenantStore{tenant: existing},
 			wantStatus: http.StatusAccepted,
 			wantBody:   `"workflowID":"delete-acme","status":"deleting","gracePeriodDays":30`,
+			started:    true,
+		},
+		{
+			name:       "failed tenant accepted for cleanup",
+			store:      &stubTenantStore{tenant: failed},
+			wantStatus: http.StatusAccepted,
+			wantBody:   `"workflowID":"delete-acme","status":"deleting"`,
+			started:    true,
 		},
 		{
 			name:       "not found",
@@ -347,11 +364,24 @@ func TestDeleteTenant(t *testing.T) {
 			wantBody:   `"error":"tenant already deleted"`,
 		},
 		{
+			name:       "provisioning tenant conflicts (lifecycle race guard)",
+			store:      &stubTenantStore{tenant: &model.Tenant{TenantID: "acme", Status: model.TenantStatusProvisioning}},
+			wantStatus: http.StatusConflict,
+			wantBody:   `"error":"tenant must be active or failed to delete"`,
+		},
+		{
+			name:       "pending tenant conflicts",
+			store:      &stubTenantStore{tenant: &model.Tenant{TenantID: "acme", Status: model.TenantStatusPending}},
+			wantStatus: http.StatusConflict,
+			wantBody:   `"error":"tenant must be active or failed to delete"`,
+		},
+		{
 			name:       "already started",
 			store:      &stubTenantStore{tenant: existing},
 			starterErr: serviceerror.NewWorkflowExecutionAlreadyStarted("already started", "delete-acme", "run-1"),
 			wantStatus: http.StatusConflict,
 			wantBody:   `"error":"deletion already in progress for this tenant"`,
+			started:    true,
 		},
 	}
 
@@ -371,6 +401,22 @@ func TestDeleteTenant(t *testing.T) {
 			}
 			if tt.wantBody != "" && !strings.Contains(rec.Body.String(), tt.wantBody) {
 				t.Errorf("body = %q, want to contain %q", rec.Body.String(), tt.wantBody)
+			}
+			workflowStarted := stub.startedOptions.ID != ""
+			if workflowStarted != tt.started {
+				t.Errorf("workflow started = %v, want %v", workflowStarted, tt.started)
+			}
+			if tt.started && tt.starterErr == nil {
+				if stub.startedOptions.ID != "delete-acme" {
+					t.Errorf("workflow ID = %q, want delete-acme", stub.startedOptions.ID)
+				}
+				if stub.startedOptions.WorkflowIDReusePolicy != enums.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE {
+					t.Errorf("reuse policy = %v, want REJECT_DUPLICATE", stub.startedOptions.WorkflowIDReusePolicy)
+				}
+				in, ok := stub.startedArgs[0].(tfworkflow.DeleteInput)
+				if !ok || in.TenantID != "acme" {
+					t.Errorf("unexpected workflow input: %#v", stub.startedArgs)
+				}
 			}
 		})
 	}
