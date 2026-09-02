@@ -15,11 +15,15 @@ type Client struct {
 	client.Client
 }
 
-func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Client, error) {
+// New dials Temporal with the given metrics handler. The handler is where
+// the SDK's temporal_* metrics go (see internal/metrics); passing
+// client.MetricsNopHandler disables them.
+func New(ctx context.Context, cfg config.Config, log *slog.Logger, mh client.MetricsHandler) (*Client, error) {
 	c, err := client.Dial(client.Options{
-		HostPort:  cfg.TemporalAddress,
-		Namespace: cfg.TemporalNamespace,
-		Logger:    sdklog.NewStructuredLogger(log),
+		HostPort:       cfg.TemporalAddress,
+		Namespace:      cfg.TemporalNamespace,
+		Logger:         sdklog.NewStructuredLogger(log),
+		MetricsHandler: mh,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("dial temaporal at %s: %w", cfg.TemporalAddress, err)

@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/joho/godotenv"
+	"go.temporal.io/sdk/client"
 
 	"github.com/2SSK/tenantflow/internal/auth"
 	"github.com/2SSK/tenantflow/internal/cloud"
@@ -33,7 +34,11 @@ type App struct {
 	Identity     identity.IdentityProvider
 }
 
-func New(ctx context.Context, process string) (*App, error) {
+// New builds the shared application dependencies (config, logger, Temporal
+// client, database, repositories, cloud provider, auth). The metrics
+// handler is threaded into the Temporal client so the SDK's temporal_*
+// metrics land in the caller's registry.
+func New(ctx context.Context, process string, mh client.MetricsHandler) (*App, error) {
 	if err := godotenv.Load(); err != nil {
 		slog.Warn("No .env file found, relying on environment", "error", err)
 	}
@@ -47,7 +52,7 @@ func New(ctx context.Context, process string) (*App, error) {
 	slog.SetDefault(log)
 	log.Info(process+" starting", "env", cfg.Env)
 
-	tc, err := temporal.New(ctx, cfg, log)
+	tc, err := temporal.New(ctx, cfg, log, mh)
 	if err != nil {
 		return nil, fmt.Errorf("temporal: %w", err)
 	}

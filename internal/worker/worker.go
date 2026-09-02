@@ -10,6 +10,7 @@ import (
 	"github.com/2SSK/tenantflow/internal/cloud"
 	"github.com/2SSK/tenantflow/internal/identity"
 	"github.com/2SSK/tenantflow/internal/instance"
+	"github.com/2SSK/tenantflow/internal/metrics"
 	"github.com/2SSK/tenantflow/internal/repository"
 	"github.com/2SSK/tenantflow/internal/temporal"
 	tfworkflow "github.com/2SSK/tenantflow/internal/workflow"
@@ -29,7 +30,7 @@ type activityRegistration struct {
 	name string
 }
 
-func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, auditRepo repository.AuditRepository, backupRepo repository.BackupRepository, provider cloud.CloudProvider, identityProvider identity.IdentityProvider, instanceRepo repository.WorkflowInstanceRepository, chaosCtrl *chaos.Controller, log *slog.Logger) *Worker {
+func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, auditRepo repository.AuditRepository, backupRepo repository.BackupRepository, provider cloud.CloudProvider, identityProvider identity.IdentityProvider, instanceRepo repository.WorkflowInstanceRepository, chaosCtrl *chaos.Controller, reg *metrics.Registry, log *slog.Logger) *Worker {
 	provision := activities.NewProvisionActivities(repo, auditRepo, provider)
 	deprovision := activities.NewDeprovisionActivities(repo, auditRepo)
 	cancelDelete := activities.NewCancelDeleteActivities(repo, auditRepo)
@@ -40,9 +41,12 @@ func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, auditRe
 	backup := activities.NewBackupActivities(backupRepo, auditRepo, provider)
 	restore := activities.NewRestoreActivities(backupRepo, auditRepo, provider)
 
-	// Interceptor order matters: the instance recorder is OUTERMOST so it
-	// observes failures injected by the chaos interceptor (next in the chain).
+	// Interceptor order matters: the metrics interceptor is OUTERMOST so it
+	// observes the final result of every activity attempt including failures
+	// injected by the chaos interceptor (next in the chain). The instance
+	// recorder follows so it too sees chaos-injected failures.
 	interceptors := []interceptor.WorkerInterceptor{
+		metrics.NewInterceptor(reg),
 		instance.NewRecorder(instanceRepo, log),
 	}
 	if chaosCtrl != nil {

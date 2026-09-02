@@ -25,6 +25,10 @@ type Config struct {
 	KeycloakAdminUser string
 	KeycloakAdminPass string
 
+	// WorkerMetricsAddr is the listen address for the worker's Prometheus
+	// scrape endpoint (":9091" by default).
+	WorkerMetricsAddr string
+
 	// Chaos controls the worker's failure-injection switch (Phase 8).
 	Chaos ChaosConfig
 }
@@ -64,6 +68,9 @@ func Load() (Config, error) {
 	cfg.KeycloakRedirectURL = getEnv("TENANTFLOW_KEYCLOAK_REDIRECT_URL", "http://localhost:3000/callback")
 	cfg.KeycloakAdminUser = getEnv("TENANTFLOW_KEYCLOAK_ADMIN_USER", "admin")
 	cfg.KeycloakAdminPass = getEnv("TENANTFLOW_KEYCLOAK_ADMIN_PASS", "admin")
+
+	// Worker-side Prometheus scrape endpoint. The API reuses HTTPPort.
+	cfg.WorkerMetricsAddr = getEnv("TENANTFLOW_WORKER_METRICS_ADDR", ":9091")
 
 	if cfg.Env != "development" && cfg.Env != "production" {
 		return Config{}, fmt.Errorf("TENANTFLOW_ENV must be development or production, got %q", cfg.Env)

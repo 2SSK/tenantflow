@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/2SSK/tenantflow/internal/app"
+	"github.com/2SSK/tenantflow/internal/metrics"
 	"github.com/2SSK/tenantflow/internal/middleware"
 	"github.com/2SSK/tenantflow/internal/router"
 )
@@ -25,15 +26,21 @@ func main() {
 func run() error {
 	ctx := context.Background()
 
-	a, err := app.New(ctx, "tenantflow api")
+	reg := metrics.New()
+	a, err := app.New(ctx, "tenantflow api", metrics.NewTemporalHandler(reg))
 	if err != nil {
 		return err
 	}
 	defer a.Close()
 
+	mux := router.New(a.TC, a.Repo, a.AuditRepo, a.BackupRepo, a.InstanceRepo, a.Auth, a.Log)
+	mux.Handle("GET /metrics", reg.Handler())
+
 	srv := &http.Server{
-		Addr:              fmt.Sprintf(":%d", a.Config.HTTPPort),
-		Handler:           middleware.RequestLogger(a.Log, router.New(a.TC, a.Repo, a.AuditRepo, a.BackupRepo, a.InstanceRepo, a.Auth, a.Log)),
+		Addr: fmt.Sprintf(":%d", a.Config.HTTPPort),
+		// Metrics is outermost so every request is counted; RequestLogger
+		// inside keeps the story-log for each request.
+		Handler:           middleware.Metrics(reg, middleware.RequestLogger(a.Log, mux)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

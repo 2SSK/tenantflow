@@ -8,6 +8,14 @@ import (
 	"github.com/2SSK/tenantflow/internal/handler"
 )
 
+// New builds the API's HTTP routing table on a single flat ServeMux.
+//
+// Go 1.22 patterns disambiguate by method, so protected routes can live
+// next to public ones on the same mux instead of hiding behind a nested
+// catch-all ("/api/"). That matters for metrics: r.Pattern — used by the
+// metrics middleware to label requests — is only precise when the route
+// matched on THIS mux, so a flat table yields labels like
+// "POST /api/v1/tenants" instead of the coarse "/api/".
 func New(tc handler.WorkflowStarter, store handler.TenantStore, auditStore handler.AuditStore, backupStore handler.BackupStore, failedRuns handler.FailedRunStore, authProvider *auth.Provider, log *slog.Logger) *http.ServeMux {
 	root := http.NewServeMux()
 
@@ -22,19 +30,21 @@ func New(tc handler.WorkflowStarter, store handler.TenantStore, auditStore handl
 	root.HandleFunc("GET /api/v1/tenants/{tenantID}/events", tenants.ListEvents)
 	root.HandleFunc("GET /api/v1/tenants/{tenantID}/backups", tenants.ListBackups)
 
-	// Mutating API routes — require authentication + role
-	protected := http.NewServeMux()
-	protected.Handle("POST /api/v1/tenants", auth.RequireRole("platform-admin", http.HandlerFunc(tenants.CreateTenant)))
-	protected.Handle("DELETE /api/v1/tenants/{tenantID}", auth.RequireRole("platform-admin", http.HandlerFunc(tenants.DeleteTenant)))
-	protected.Handle("POST /api/v1/tenants/{tenantID}/cancel-delete", auth.RequireRole("platform-admin", http.HandlerFunc(tenants.CancelTenantDelete)))
-	protected.Handle("POST /api/v1/tenants/{tenantID}/upgrade", auth.RequireRole("platform-admin", http.HandlerFunc(tenants.UpgradeTenant)))
-	protected.Handle("POST /api/v1/tenants/{tenantID}/migrate", auth.RequireRole("platform-admin", http.HandlerFunc(tenants.MigrateTenant)))
-	protected.Handle("POST /api/v1/tenants/{tenantID}/backup", auth.RequireRole("platform-admin", http.HandlerFunc(tenants.BackupTenant)))
-	protected.Handle("POST /api/v1/tenants/{tenantID}/restore", auth.RequireRole("platform-admin", http.HandlerFunc(tenants.RestoreTenant)))
-	// DLQ + recovery routes — require authentication + role
-	protected.Handle("GET /api/v1/failed-runs", auth.RequireRole("platform-admin", http.HandlerFunc(tenants.ListFailedRuns)))
-	protected.Handle("POST /api/v1/tenants/{tenantID}/retry", auth.RequireRole("platform-admin", http.HandlerFunc(tenants.RetryTenant)))
-	root.Handle("/api/", auth.RequireAuth(authProvider, protected))
+	// Mutating API routes — auth first (token), then role.
+	admin := func(h http.HandlerFunc) http.Handler {
+		return auth.RequireAuth(authProvider, auth.RequireRole("platform-admin", h))
+	}
+	root.Handle("POST /api/v1/tenants", admin(tenants.CreateTenant))
+	root.Handle("DELETE /api/v1/tenants/{tenantID}", admin(tenants.DeleteTenant))
+	root.Handle("POST /api/v1/tenants/{tenantID}/cancel-delete", admin(tenants.CancelTenantDelete))
+	root.Handle("POST /api/v1/tenants/{tenantID}/upgrade", admin(tenants.UpgradeTenant))
+	root.Handle("POST /api/v1/tenants/{tenantID}/migrate", admin(tenants.MigrateTenant))
+	root.Handle("POST /api/v1/tenants/{tenantID}/backup", admin(tenants.BackupTenant))
+	root.Handle("POST /api/v1/tenants/{tenantID}/restore", admin(tenants.RestoreTenant))
+
+	// DLQ + recovery routes
+	root.Handle("GET /api/v1/failed-runs", admin(tenants.ListFailedRuns))
+	root.Handle("POST /api/v1/tenants/{tenantID}/retry", admin(tenants.RetryTenant))
 
 	return root
 }
