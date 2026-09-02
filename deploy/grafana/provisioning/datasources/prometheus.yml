@@ -1,0 +1,15 @@
+# Provision the Prometheus datasource for Grafana. Mounted by the tf-grafana
+# container under /etc/grafana/provisioning. The datasource UID is pinned so
+# dashboard JSON can reference it statically.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://localhost:9092
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 5s

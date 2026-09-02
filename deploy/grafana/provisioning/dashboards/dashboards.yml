@@ -1,0 +1,14 @@
+# Dashboards provider: every JSON file under dashboards/ is imported on
+# container start and reloaded on change (reads from the mounted folder).
+apiVersion: 1
+
+providers:
+  - name: tenantflow
+    orgId: 1
+    folder: TenantFlow
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 10
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

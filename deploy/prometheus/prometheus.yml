@@ -1,0 +1,31 @@
+# Prometheus scrape config for the TenantFlow API and worker.
+#
+# Both processes are host processes (not containers) and expose only a
+# Prometheus endpoint each:
+#   API    :9090/metrics  (tenantflow_http_requests_total, go_*, temporal_*)
+#   Worker :9091/metrics  (tenantflow_activity_executions_total, go_*, temporal_*)
+#
+# Run Prometheus on :9092 (the API owns :9090, Prometheus' default) with
+# host networking so the localhost targets below resolve:
+#   docker run -d --name tf-prometheus --network=host \
+#     -v "$PWD/deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
+#     prom/prometheus --config.file=/etc/prometheus/prometheus.yml --web.listen-address=:9092
+global:
+  scrape_interval: 5s
+  evaluation_interval: 10s
+
+scrape_configs:
+  - job_name: tenantflow-api
+    static_configs:
+      - targets: ["localhost:9090"]
+    metrics_path: /metrics
+
+  - job_name: tenantflow-worker
+    static_configs:
+      - targets: ["localhost:9091"]
+    metrics_path: /metrics
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9092"]
+    metrics_path: /metrics
