@@ -808,7 +808,7 @@ Next.js app in `web/`:
 | --- | -------------------------------- | ------ |
 | 9.1 | Metrics + Grafana                | ☐      |
 | 9.2 | Per-tenant cost view (stretch)   | ☑ |
-| 9.3 | README + screenshots             | ☐      |
+| 9.3 | README + screenshots             | ☑ |
 | 9.4 | Demo video                       | ☐      |
 | 9.5 | Blog posts                       | ☐      |
 | 9.6 | Live deployment + portfolio link | ☐      |
