@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/2SSK/tenantflow/internal/model"
+	"github.com/2SSK/tenantflow/internal/repository"
 
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/workflow"
@@ -47,6 +48,13 @@ func (m *memRepo) MarkFailed(ctx context.Context, workflowID, runID, errMsg stri
 		}
 	}
 	return nil
+}
+
+// FindLatestFailed mirrors the production query for the recorder's
+// dependency tests; the recorder itself never calls it (it only inserts
+// and marks), so failing loudly is fine here.
+func (m *memRepo) FindLatestFailed(ctx context.Context, tenantID, workflowType string) (model.WorkflowInstance, error) {
+	return model.WorkflowInstance{}, repository.ErrNotFound
 }
 
 func (m *memRepo) ListFailed(ctx context.Context, limit int) ([]model.WorkflowInstance, error) {

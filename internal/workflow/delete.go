@@ -11,14 +11,26 @@ import (
 	"github.com/2SSK/tenantflow/internal/model"
 )
 
+// DeleteTenantWorkflowName is the workflow type the recorder stores for
+// failed delete runs, and the key the DLQ replay uses to resume a stuck
+// deletion instead of re-provisioning.
+const DeleteTenantWorkflowName = "DeleteTenantWorkflow"
+
 // CancelDeleteSignalName is the signal an operator sends to stop an in-flight
 // deletion during the grace period. The handler (POST /cancel-delete) signals
 // the running workflow by this name.
 const CancelDeleteSignalName = "cancel-delete"
 
 type DeleteInput struct {
-	TenantID    string
+	TenantID string
+	// GracePeriod is the durable wait before teardown starts. Ignored when
+	// Resume is true — a resumed deletion already lost its grace window.
 	GracePeriod time.Duration
+	// Resume continues teardown for a tenant stuck in "deleting" (a delete
+	// workflow that failed permanently after the CAS committed). Resume skips
+	// the state transition and the grace period: it picks up where the failed
+	// run stopped. Started by the DLQ replay endpoint, never by DELETE.
+	Resume bool
 }
 
 // teardownBackupVersion is the workflow-version marker for the v1 teardown
@@ -61,9 +73,16 @@ const teardownBackupVersion workflow.Version = 1
 // If a step fails (e.g. teardown), we only audit TENANT_DELETE_FAILED and leave
 // the tenant in "deleting" — reviving a half-torn-down tenant would be a lie,
 // and the operator can investigate the stuck state.
+//
+// Resume (DLQ replay): a stuck "deleting" tenant has no operator lever today —
+// cancel-delete needs a live workflow and retry only replays provisioning. A
+// resumed run skips the CAS transition and the grace timer and runs straight
+// into teardown, ending with the same MarkTenantDeleted CAS as a normal run.
+// Teardown is idempotent (simulated here; drop-if-exists in a real cloud), so
+// replaying it is safe.
 func DeleteTenantWorkflow(ctx workflow.Context, in DeleteInput) (err error) {
 	logger := workflow.GetLogger(ctx)
-	logger.Info("Starting DeleteTenantWorkflow", "TenantID", in.TenantID, "GracePeriod", in.GracePeriod)
+	logger.Info("Starting DeleteTenantWorkflow", "TenantID", in.TenantID, "GracePeriod", in.GracePeriod, "Resume", in.Resume)
 
 	info := workflow.GetInfo(ctx)
 	workflowID := info.WorkflowExecution.ID
@@ -86,38 +105,44 @@ func DeleteTenantWorkflow(ctx workflow.Context, in DeleteInput) (err error) {
 		}
 	}()
 
-	if err = workflow.ExecuteActivity(actCtx, activities.MarkTenantDeletingActivityName, in.TenantID).Get(actCtx, nil); err != nil {
-		return err
-	}
-
-	// ── Durable wait: whichever comes first, the timer or the signal. ──
-	// The timer future is recorded in history (survives crashes). The signal
-	// channel receives "cancel-delete" messages sent by the API server. The
-	// selector blocks durably until exactly one of them is ready.
-	timerFuture := workflow.NewTimer(ctx, in.GracePeriod)
-	signalChan := workflow.GetSignalChannel(ctx, CancelDeleteSignalName)
-
-	selector := workflow.NewSelector(ctx)
-	selector.AddFuture(timerFuture, func(f workflow.Future) {
-		// Timer expired: fall through to teardown.
-		logger.Info("grace period expired, proceeding with teardown", "TenantID", in.TenantID)
-	})
-	selector.AddReceive(signalChan, func(c workflow.ReceiveChannel, more bool) {
-		// Operator cancelled: consume the (empty) signal payload and take the
-		// restore path.
-		var payload struct{}
-		c.Receive(ctx, &payload)
-		cancelled = true
-		logger.Info("deletion cancelled by signal during grace period", "TenantID", in.TenantID)
-	})
-	selector.Select(ctx)
-
-	if cancelled {
-		if err = workflow.ExecuteActivity(actCtx, activities.RestoreTenantAfterCancelActivityName, in.TenantID).Get(actCtx, nil); err != nil {
+	// A resume is a continuation, not a fresh delete: the tenant is already
+	// "deleting" (the CAS that got there was committed by the run this replay
+	// replaces) and the operator already had their grace window. Both steps
+	// below are a new start only.
+	if !in.Resume {
+		if err = workflow.ExecuteActivity(actCtx, activities.MarkTenantDeletingActivityName, in.TenantID).Get(actCtx, nil); err != nil {
 			return err
 		}
-		logger.Info("DeleteTenantWorkflow cancelled during grace period", "TenantID", in.TenantID, "WorkflowID", workflowID)
-		return nil
+
+		// ── Durable wait: whichever comes first, the timer or the signal. ──
+		// The timer future is recorded in history (survives crashes). The signal
+		// channel receives "cancel-delete" messages sent by the API server. The
+		// selector blocks durably until exactly one of them is ready.
+		timerFuture := workflow.NewTimer(ctx, in.GracePeriod)
+		signalChan := workflow.GetSignalChannel(ctx, CancelDeleteSignalName)
+
+		selector := workflow.NewSelector(ctx)
+		selector.AddFuture(timerFuture, func(f workflow.Future) {
+			// Timer expired: fall through to teardown.
+			logger.Info("grace period expired, proceeding with teardown", "TenantID", in.TenantID)
+		})
+		selector.AddReceive(signalChan, func(c workflow.ReceiveChannel, more bool) {
+			// Operator cancelled: consume the (empty) signal payload and take the
+			// restore path.
+			var payload struct{}
+			c.Receive(ctx, &payload)
+			cancelled = true
+			logger.Info("deletion cancelled by signal during grace period", "TenantID", in.TenantID)
+		})
+		selector.Select(ctx)
+
+		if cancelled {
+			if err = workflow.ExecuteActivity(actCtx, activities.RestoreTenantAfterCancelActivityName, in.TenantID).Get(actCtx, nil); err != nil {
+				return err
+			}
+			logger.Info("DeleteTenantWorkflow cancelled during grace period", "TenantID", in.TenantID, "WorkflowID", workflowID)
+			return nil
+		}
 	}
 
 	// ── v1: capture a verified pre-delete backup before any destruction. ──

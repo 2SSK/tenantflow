@@ -46,6 +46,9 @@ type BackupStore interface {
 // mirrors of failed runs.
 type FailedRunStore interface {
 	ListFailed(ctx context.Context, limit int) ([]model.WorkflowInstance, error)
+	// FindLatestFailed lets the retry decision pick the workflow type of the
+	// most recent failed run for a tenant (provision vs delete).
+	FindLatestFailed(ctx context.Context, tenantID, workflowType string) (model.WorkflowInstance, error)
 }
 
 // TenantHandler handles /api/v1/tenants endpoints.
@@ -766,12 +769,21 @@ type RetryTenantResponse struct {
 	Message    string `json:"message"`
 }
 
-// RetryTenant handles POST /api/v1/tenants/{tenantID}/retry.
+// RetryTenant handles POST /api/v1/tenants/{tenantID}/retry — the manual DLQ
+// replay. It is workflow-aware: the failed run's type decides what "retry"
+// means for this tenant.
 //
-// It restarts the provisioning workflow for a tenant left in the 'failed'
-// state, reusing the same workflow ID (allowed once the previous run is
-// closed, which a failed run is). The manual replay is recorded in the audit
-// stream so the recovery is traceable.
+//	tenant failed   → restart the provisioning workflow (existing behavior),
+//	                  same workflow ID once the previous run is closed.
+//	tenant deleting → resume the delete workflow (Resume=true): the tenant is
+//	                  stuck mid-teardown because a delete run failed after the
+//	                  CAS committed, and there is no other operator lever —
+//	                  cancel-delete needs a live workflow. Replaying from
+//	                  "deleting" continues teardown to the terminal "deleted"
+//	                  state without a fresh grace period.
+//
+// Everything else is 409: replaying into a state that does not match the
+// failed run would make the CAS model lie about what actually happened.
 func (h *TenantHandler) RetryTenant(w http.ResponseWriter, r *http.Request) {
 	tenantID := r.PathValue("tenantID")
 
@@ -786,12 +798,19 @@ func (h *TenantHandler) RetryTenant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The DLQ manual-replay story only makes sense for tenants the saga
-	// actually left failed; everything else has a different recovery path.
-	if tenant.Status != model.TenantStatusFailed {
-		writeError(w, http.StatusConflict, "only failed tenants can be retried")
-		return
+	switch tenant.Status {
+	case model.TenantStatusFailed:
+		h.retryProvision(w, r, tenant)
+	case model.TenantStatusDeleting:
+		h.resumeDelete(w, r, tenant)
+	default:
+		writeError(w, http.StatusConflict, "only failed tenants can be retried or stuck deletions resumed")
 	}
+}
+
+// retryProvision replays the provisioning workflow for a tenant left failed.
+func (h *TenantHandler) retryProvision(w http.ResponseWriter, r *http.Request, tenant *model.Tenant) {
+	tenantID := tenant.TenantID
 
 	workflowID := "provision-" + tenantID
 	run, err := h.temporal.ExecuteWorkflow(r.Context(), client.StartWorkflowOptions{
@@ -809,18 +828,7 @@ func (h *TenantHandler) RetryTenant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Record the manual replay. The actor is the fixed role that may call
-	// this endpoint (actor identity is not yet plumbed into the request).
-	if err := h.auditStore.WriteEvent(r.Context(), &model.AuditEvent{
-		TenantID:   tenantID,
-		WorkflowID: &workflowID,
-		EventType:  model.AuditEventTenantReprovisionReq,
-		Actor:      "platform-admin",
-		Payload:    map[string]any{"runID": run.GetRunID()},
-	}); err != nil {
-		h.log.Error("record retry audit", "tenantID", tenantID, "error", err)
-	}
-
+	h.auditRetry(r.Context(), tenantID, workflowID, run.GetRunID(), model.AuditEventTenantReprovisionReq)
 	h.log.Info("provision workflow retried", "tenantID", tenantID,
 		"workflowID", run.GetID(), "runID", run.GetRunID())
 	writeJSON(w, http.StatusAccepted, RetryTenantResponse{
@@ -829,4 +837,64 @@ func (h *TenantHandler) RetryTenant(w http.ResponseWriter, r *http.Request) {
 		RunID:      run.GetRunID(),
 		Message:    "provisioning workflow restarted",
 	})
+}
+
+// resumeDelete continues teardown for a tenant stuck in "deleting", but only
+// if the DLQ actually contains a failed delete run to resume — a live delete
+// workflow is still progressing and must not be double-run.
+func (h *TenantHandler) resumeDelete(w http.ResponseWriter, r *http.Request, tenant *model.Tenant) {
+	tenantID := tenant.TenantID
+
+	_, err := h.failedRuns.FindLatestFailed(r.Context(), tenantID, tfworkflow.DeleteTenantWorkflowName)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			writeError(w, http.StatusConflict, "tenant is deleting but no failed delete run exists to resume")
+			return
+		}
+		h.log.Error("find failed delete run", "tenantID", tenantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to look up failed delete run")
+		return
+	}
+
+	workflowID := "delete-" + tenantID
+	run, err := h.temporal.ExecuteWorkflow(r.Context(), client.StartWorkflowOptions{
+		ID:                                       workflowID,
+		TaskQueue:                                tfworkflow.TaskQueue,
+		WorkflowIDReusePolicy:                    enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
+		WorkflowExecutionErrorWhenAlreadyStarted: true,
+	}, tfworkflow.DeleteTenantWorkflow, tfworkflow.DeleteInput{
+		TenantID:    tenantID,
+		GracePeriod: deleteGracePeriod,
+		Resume:      true,
+	})
+	if err != nil {
+		h.log.Error("resume delete workflow", "tenantID", tenantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to resume delete workflow")
+		return
+	}
+
+	h.auditRetry(r.Context(), tenantID, workflowID, run.GetRunID(), model.AuditEventTenantDeleteResumed)
+	h.log.Info("delete workflow resumed from DLQ", "tenantID", tenantID,
+		"workflowID", run.GetID(), "runID", run.GetRunID())
+	writeJSON(w, http.StatusAccepted, RetryTenantResponse{
+		TenantID:   tenantID,
+		WorkflowID: run.GetID(),
+		RunID:      run.GetRunID(),
+		Message:    "delete workflow resumed",
+	})
+}
+
+// auditRetry records a manual DLQ replay in the audit stream so every
+// recovery is traceable. The actor is the fixed role that may call this
+// endpoint (actor identity is not yet plumbed into the request).
+func (h *TenantHandler) auditRetry(ctx context.Context, tenantID, workflowID, runID string, eventType model.AuditEventType) {
+	if err := h.auditStore.WriteEvent(ctx, &model.AuditEvent{
+		TenantID:   tenantID,
+		WorkflowID: &workflowID,
+		EventType:  eventType,
+		Actor:      "platform-admin",
+		Payload:    map[string]any{"runID": runID},
+	}); err != nil {
+		h.log.Error("record retry audit", "tenantID", tenantID, "error", err)
+	}
 }

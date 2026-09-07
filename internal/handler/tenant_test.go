@@ -55,11 +55,30 @@ type stubFailedRunStore struct {
 	instances []model.WorkflowInstance
 	err       error
 	lastLimit int
+	// failedRun / findErr back FindLatestFailed (the DLQ replay lookup).
+	failedRun        model.WorkflowInstance
+	findErr          error
+	lastTenantID     string
+	lastWorkflowType string
 }
 
 func (s *stubFailedRunStore) ListFailed(ctx context.Context, limit int) ([]model.WorkflowInstance, error) {
 	s.lastLimit = limit
 	return s.instances, s.err
+}
+
+func (s *stubFailedRunStore) FindLatestFailed(ctx context.Context, tenantID, workflowType string) (model.WorkflowInstance, error) {
+	s.lastTenantID = tenantID
+	s.lastWorkflowType = workflowType
+	if s.findErr != nil {
+		return model.WorkflowInstance{}, s.findErr
+	}
+	// A zero-value instance means "no run configured": behave like the empty
+	// DLQ unless a test explicitly provides a failed run.
+	if s.failedRun.TenantID == "" {
+		return model.WorkflowInstance{}, repository.ErrNotFound
+	}
+	return s.failedRun, nil
 }
 
 func (s *stubBackupStore) ListBackups(ctx context.Context, tenantID string) ([]model.Backup, error) {
@@ -885,15 +904,28 @@ func TestRestoreTenant(t *testing.T) {
 func TestRetryTenant(t *testing.T) {
 	failedTenant := &model.Tenant{TenantID: "acme", Status: model.TenantStatusFailed, IsolationMode: model.IsolationModeDedicated}
 	activeTenant := &model.Tenant{TenantID: "acme", Status: model.TenantStatusActive}
+	deletingTenant := &model.Tenant{TenantID: "acme", Status: model.TenantStatusDeleting, IsolationMode: model.IsolationModeDedicated}
+	failedDeleteRun := model.WorkflowInstance{
+		TenantID:     "acme",
+		WorkflowType: "DeleteTenantWorkflow",
+		WorkflowID:   "delete-acme",
+		RunID:        "run-1",
+		Status:       "failed",
+	}
 
 	tests := []struct {
 		name       string
 		tenant     *model.Tenant
 		storeErr   error
 		startErr   error
+		findErr    error
+		failedRun  model.WorkflowInstance
 		wantStatus int
 		wantBody   string
 		started    bool
+		wantID     string
+		wantResume bool
+		wantAudit  model.AuditEventType
 	}{
 		{
 			name:       "starts provisioning for a failed tenant",
@@ -901,12 +933,33 @@ func TestRetryTenant(t *testing.T) {
 			wantStatus: http.StatusAccepted,
 			wantBody:   `"workflowID":"provision-acme"`,
 			started:    true,
+			wantID:     "provision-acme",
+			wantAudit:  model.AuditEventTenantReprovisionReq,
 		},
 		{
-			name:       "conflict when tenant is not failed",
+			name:       "resumes delete for a stuck deleting tenant",
+			tenant:     deletingTenant,
+			failedRun:  failedDeleteRun,
+			wantStatus: http.StatusAccepted,
+			wantBody:   `"workflowID":"delete-acme"`,
+			started:    true,
+			wantID:     "delete-acme",
+			wantResume: true,
+			wantAudit:  model.AuditEventTenantDeleteResumed,
+		},
+		{
+			name:       "conflict deleting without a failed delete run",
+			tenant:     deletingTenant,
+			findErr:    repository.ErrNotFound,
+			wantStatus: http.StatusConflict,
+			wantBody:   "no failed delete run exists to resume",
+			started:    false,
+		},
+		{
+			name:       "conflict when tenant is neither failed nor stuck deleting",
 			tenant:     activeTenant,
 			wantStatus: http.StatusConflict,
-			wantBody:   "only failed tenants can be retried",
+			wantBody:   "only failed tenants can be retried or stuck deletions resumed",
 			started:    false,
 		},
 		{
@@ -923,6 +976,8 @@ func TestRetryTenant(t *testing.T) {
 			wantStatus: http.StatusInternalServerError,
 			wantBody:   "failed to restart provisioning workflow",
 			started:    true,
+			wantID:     "provision-acme",
+			wantAudit:  model.AuditEventTenantReprovisionReq,
 		},
 	}
 
@@ -930,7 +985,7 @@ func TestRetryTenant(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			stub := &stubWorkflowStarter{err: tt.startErr}
 			audit := &stubAuditStore{}
-			h := NewTenantHandler(stub, &stubTenantStore{tenant: tt.tenant, err: tt.storeErr}, audit, &stubBackupStore{}, &stubFailedRunStore{}, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+			h := NewTenantHandler(stub, &stubTenantStore{tenant: tt.tenant, err: tt.storeErr}, audit, &stubBackupStore{}, &stubFailedRunStore{failedRun: tt.failedRun, findErr: tt.findErr}, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
 
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/tenants/acme/retry", nil)
 			req.SetPathValue("tenantID", "acme")
@@ -949,14 +1004,23 @@ func TestRetryTenant(t *testing.T) {
 				t.Errorf("workflow started = %v, want %v", workflowStarted, tt.started)
 			}
 			if tt.started && tt.startErr == nil {
-				if stub.startedOptions.ID != "provision-acme" {
-					t.Errorf("workflow ID = %q, want provision-acme", stub.startedOptions.ID)
+				if stub.startedOptions.ID != tt.wantID {
+					t.Errorf("workflow ID = %q, want %q", stub.startedOptions.ID, tt.wantID)
 				}
 				if stub.startedOptions.WorkflowIDReusePolicy != enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE {
 					t.Errorf("reuse policy = %v, want ALLOW_DUPLICATE", stub.startedOptions.WorkflowIDReusePolicy)
 				}
-				if len(audit.events) != 1 || audit.events[0].EventType != model.AuditEventTenantReprovisionReq {
-					t.Errorf("expected TENANT_REPROVISION_REQUESTED audit event, got %+v", audit.events)
+				if len(audit.events) != 1 || audit.events[0].EventType != tt.wantAudit {
+					t.Errorf("expected audit event %s, got %+v", tt.wantAudit, audit.events)
+				}
+				if tt.wantResume {
+					in, ok := stub.startedArgs[0].(tfworkflow.DeleteInput)
+					if !ok {
+						t.Fatalf("started args[0] = %T, want workflow.DeleteInput", stub.startedArgs[0])
+					}
+					if !in.Resume {
+						t.Error("DeleteInput.Resume = false, want true")
+					}
 				}
 			}
 		})

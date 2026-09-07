@@ -2,9 +2,11 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/2SSK/tenantflow/internal/model"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -18,6 +20,11 @@ type WorkflowInstanceRepository interface {
 	MarkFailed(ctx context.Context, workflowID, runID, errMsg string) error
 	// ListFailed returns failed runs, most recent first, up to limit.
 	ListFailed(ctx context.Context, limit int) ([]model.WorkflowInstance, error)
+	// FindLatestFailed returns the most recent failed run for a tenant and
+	// workflow type — the record the DLQ replay needs to decide HOW to resume
+	// (a provision replay vs a delete resume). Returns ErrNotFound when the
+	// tenant has no such failed run.
+	FindLatestFailed(ctx context.Context, tenantID, workflowType string) (model.WorkflowInstance, error)
 }
 
 // PostgresWorkflowInstanceRepository implements WorkflowInstanceRepository.
@@ -80,6 +87,31 @@ func (r *PostgresWorkflowInstanceRepository) ListFailed(ctx context.Context, lim
 		return nil, err
 	}
 	return out, nil
+}
+
+func (r *PostgresWorkflowInstanceRepository) FindLatestFailed(ctx context.Context, tenantID, workflowType string) (model.WorkflowInstance, error) {
+	var inst model.WorkflowInstance
+	var tenantIDScan *string
+	var finishedAt *time.Time
+	err := r.pool.QueryRow(ctx, `
+	SELECT id, tenant_id, workflow_type, workflow_id, run_id, status,
+	       error ->> 'message' AS error_message, started_at, finished_at
+	FROM workflow_instances
+	WHERE status = 'failed' AND tenant_id = $1 AND workflow_type = $2
+	ORDER BY started_at DESC
+	LIMIT 1`, tenantID, workflowType).Scan(&inst.ID, &tenantIDScan, &inst.WorkflowType, &inst.WorkflowID,
+		&inst.RunID, &inst.Status, &inst.Error, &inst.StartedAt, &finishedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return model.WorkflowInstance{}, ErrNotFound
+		}
+		return model.WorkflowInstance{}, err
+	}
+	if tenantIDScan != nil {
+		inst.TenantID = *tenantIDScan
+	}
+	inst.FinishedAt = finishedAt
+	return inst, nil
 }
 
 // nullIfEmpty converts an empty string into a SQL NULL (used for the nullable

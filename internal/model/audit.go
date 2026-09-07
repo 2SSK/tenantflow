@@ -29,6 +29,7 @@ const (
 	AuditEventTenantRestoreRolledBack   AuditEventType = "TENANT_RESTORE_ROLLED_BACK"
 	AuditEventTenantDeleteCancelled     AuditEventType = "TENANT_DELETE_CANCELLED"
 	AuditEventTenantDeleteFailed        AuditEventType = "TENANT_DELETE_FAILED"
+	AuditEventTenantDeleteResumed       AuditEventType = "TENANT_DELETE_RESUMED"
 	AuditEventTenantReprovisionReq      AuditEventType = "TENANT_REPROVISION_REQUESTED"
 	AuditEventTenantProvisionRolledBack AuditEventType = "TENANT_PROVISION_ROLLED_BACK"
 )

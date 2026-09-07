@@ -113,6 +113,44 @@ func TestDeleteWorkflow_TeardownFailsAfterTimerExpiry(t *testing.T) {
 	env.AssertNotCalled(t, activities.MarkTenantDeletedActivityName, mock.Anything, "acme-del")
 }
 
+// A resume is the DLQ replay of a failed delete run: the tenant is already in
+// "deleting" and the operator already had their grace window. The workflow
+// must skip the state transition AND the grace timer/cancel selector and go
+// straight to teardown. It reflects an operator-lever decision, which is why
+// the workflow still trusts the input rather than probing the DB.
+func TestDeleteWorkflow_ResumeSkipsTransitionAndGrace(t *testing.T) {
+	env := (&testsuite.WorkflowTestSuite{}).NewTestWorkflowEnvironment()
+
+	env.RegisterActivity(activities.NewDeprovisionActivities(nil, nil))
+	env.RegisterActivity(activities.NewCancelDeleteActivities(nil, nil))
+	env.RegisterActivity(activities.NewBackupActivities(nil, nil, nil))
+
+	// Note: MarkTenantDeleting is deliberately NOT stubbed. If the workflow
+	// tried to run it on the resume path, the mock would panic with "unexpected
+	// call" and the test would fail — the strongest assertion there is.
+	env.OnActivity(activities.BackupTenantDataActivityName, mock.Anything, "acme-del").Return(&model.Backup{ID: 9, Filename: "pre-delete.tar.gz"}, nil)
+	env.OnActivity(activities.DeprovisionTenantActivityName, mock.Anything, "acme-del").Return(nil)
+	env.OnActivity(activities.MarkTenantDeletedActivityName, mock.Anything, "acme-del").Return(nil)
+
+	env.ExecuteWorkflow(DeleteTenantWorkflow, DeleteInput{TenantID: "acme-del", GracePeriod: 30 * 24 * time.Hour, Resume: true})
+
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("workflow did not complete")
+	}
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatalf("unexpected workflow error: %v", err)
+	}
+
+	// Teardown ran to completion...
+	env.AssertCalled(t, activities.DeprovisionTenantActivityName, mock.Anything, "acme-del")
+	env.AssertCalled(t, activities.MarkTenantDeletedActivityName, mock.Anything, "acme-del")
+	// ...without re-entering deleting, without touching the cancel path, and
+	// without a failure audit.
+	env.AssertNotCalled(t, activities.MarkTenantDeletingActivityName, mock.Anything, "acme-del")
+	env.AssertNotCalled(t, activities.RestoreTenantAfterCancelActivityName, mock.Anything, "acme-del")
+	env.AssertNotCalled(t, activities.MarkTenantDeleteFailedActivityName, mock.Anything, "acme-del")
+}
+
 // The cancel signal arrives and the restore activity itself fails: the
 // deferred compensation still audits TENANT_DELETE_FAILED and the workflow
 // surfaces the error, so the stuck state is visible to operators.
