@@ -118,7 +118,8 @@ func (r *PostgresTenantRepository) ListTenantResources(ctx context.Context) ([]c
 		(SELECT count(*) FROM workflow_instances w WHERE w.tenant_id = t.tenant_id
 			AND w.started_at > now() - interval '30 days'),
 		(SELECT count(*) FROM backups b WHERE b.tenant_id = t.tenant_id AND b.status = 'completed')
-	FROM tenants t`)
+	FROM tenants t
+	WHERE t.status <> 'deleted'`)
 	if err != nil {
 		return nil, fmt.Errorf("measure all tenant resources: %w", err)
 	}
