@@ -29,6 +29,7 @@ func New(tc handler.WorkflowStarter, store handler.TenantStore, auditStore handl
 	root.HandleFunc("GET /api/v1/tenants/{tenantID}", tenants.GetTenant)
 	root.HandleFunc("GET /api/v1/tenants/{tenantID}/events", tenants.ListEvents)
 	root.HandleFunc("GET /api/v1/tenants/{tenantID}/backups", tenants.ListBackups)
+	root.HandleFunc("GET /api/v1/tenants/{tenantID}/cost", tenants.CostTenant)
 
 	// Mutating API routes — auth first (token), then role.
 	admin := func(h http.HandlerFunc) http.Handler {

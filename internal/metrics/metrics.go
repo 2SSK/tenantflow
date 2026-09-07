@@ -108,6 +108,14 @@ func (r *Registry) mustRegister(cs ...prometheus.Collector) {
 	r.prom.MustRegister(cs...)
 }
 
+// MustRegister attaches extra collectors (e.g. the per-tenant cost
+// collector built in internal/cost) to the registry. Like
+// prometheus.MustRegister, a name conflict panics — better to fail at
+// startup than to scrape a half-registered metric.
+func (r *Registry) MustRegister(cs ...prometheus.Collector) {
+	r.prom.MustRegister(cs...)
+}
+
 // TemporalHandler adapts the Temporal SDK's metrics interface to our
 // Prometheus registry. The SDK calls WithTags with its tag conventions
 // (namespace, workflow_type, activity_type, task_queue, ...), then asks

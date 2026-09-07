@@ -95,6 +95,39 @@
           "legendFormat": "{{task_queue}}"
         }
       ]
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Monthly cost per tenant",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "fieldConfig": {
+        "defaults": { "unit": "$", "custom": { "align": "left", "displayMode": "auto" } },
+        "overrides": []
+      },
+      "options": { "showHeader": true, "sortBy": [{ "displayName": "Value", "desc": true }] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "tenantflow_tenant_monthly_cost_dollars",
+          "instant": true,
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Total monthly cost (all tenants)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "$" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "values": false, "fields": "" } },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(tenantflow_tenant_monthly_cost_dollars)"
+        }
+      ]
     }
   ],
   "templating": { "list": [] },

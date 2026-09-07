@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/2SSK/tenantflow/internal/app"
+	"github.com/2SSK/tenantflow/internal/cost"
 	"github.com/2SSK/tenantflow/internal/metrics"
 	"github.com/2SSK/tenantflow/internal/middleware"
 	"github.com/2SSK/tenantflow/internal/router"
@@ -32,6 +33,26 @@ func run() error {
 		return err
 	}
 	defer a.Close()
+
+	// Per-tenant cost collector: measures every tenant's resources and
+	// applies the price model at every scrape, so deleted tenants can never
+	// leave stale cost series behind in Prometheus.
+	costLoader := cost.Loader(func(ctx context.Context) ([]cost.TenantEstimate, error) {
+		tenants, err := a.Repo.ListTenantResources(ctx)
+		if err != nil {
+			return nil, err
+		}
+		estimates := make([]cost.TenantEstimate, 0, len(tenants))
+		for _, t := range tenants {
+			estimates = append(estimates, cost.TenantEstimate{
+				TenantID:  t.TenantID,
+				Resources: t.Resources,
+				Estimate:  cost.MonthlyEstimate(t.Resources, cost.DefaultModel),
+			})
+		}
+		return estimates, nil
+	})
+	reg.MustRegister(cost.NewCollector(costLoader, a.Log))
 
 	mux := router.New(a.TC, a.Repo, a.AuditRepo, a.BackupRepo, a.InstanceRepo, a.Auth, a.Log)
 	mux.Handle("GET /metrics", reg.Handler())

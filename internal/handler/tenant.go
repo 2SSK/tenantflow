@@ -15,6 +15,7 @@ import (
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
 
+	"github.com/2SSK/tenantflow/internal/cost"
 	"github.com/2SSK/tenantflow/internal/model"
 	"github.com/2SSK/tenantflow/internal/repository"
 	tfworkflow "github.com/2SSK/tenantflow/internal/workflow"
@@ -30,6 +31,9 @@ type WorkflowStarter interface {
 type TenantStore interface {
 	GetTenant(ctx context.Context, tenantID string) (*model.Tenant, error)
 	ListTenants(ctx context.Context) ([]model.Tenant, error)
+	// TenantResources returns the measured metadata feeding the per-tenant
+	// cost estimator (database size, isolation tier, run + backup counts).
+	TenantResources(ctx context.Context, tenantID string) (cost.Resources, error)
 }
 
 type AuditStore interface {
@@ -266,6 +270,46 @@ func (h *TenantHandler) GetTenant(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, toTenantResponse(tenant))
+}
+
+// CostResponse is what GET /tenants/{id}/cost returns: the measured
+// metadata alongside the price-model breakdown, so operators see both the
+// facts and the money.
+type CostResponse struct {
+	TenantID   string         `json:"tenantID"`
+	PriceModel string         `json:"priceModel"`
+	Resources  cost.Resources `json:"resources"`
+	Estimate   cost.Estimate  `json:"estimate"`
+}
+
+// CostTenant reports the estimated monthly cost of one tenant. Not found
+// tenants 404 just like the detail endpoint; measurement errors 500.
+func (h *TenantHandler) CostTenant(w http.ResponseWriter, r *http.Request) {
+	tenantID := r.PathValue("tenantID")
+
+	if _, err := h.store.GetTenant(r.Context(), tenantID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "tenant not found")
+			return
+		}
+		h.log.Error("cost tenant: lookup", "tenantID", tenantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to look up tenant")
+		return
+	}
+
+	res, err := h.store.TenantResources(r.Context(), tenantID)
+	if err != nil {
+		h.log.Error("cost tenant: measure", "tenantID", tenantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to measure tenant resources")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, CostResponse{
+		TenantID:   tenantID,
+		PriceModel: "default",
+		Resources:  res,
+		Estimate:   cost.MonthlyEstimate(res, cost.DefaultModel),
+	})
 }
 
 // toTenantResponse converts the storage model into the API response shape.

@@ -16,6 +16,7 @@ import (
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
 
+	"github.com/2SSK/tenantflow/internal/cost"
 	"github.com/2SSK/tenantflow/internal/model"
 	"github.com/2SSK/tenantflow/internal/repository"
 	tfworkflow "github.com/2SSK/tenantflow/internal/workflow"
@@ -35,6 +36,9 @@ type stubTenantStore struct {
 	tenant  *model.Tenant
 	tenants []model.Tenant
 	err     error
+	// cost simulation
+	resources cost.Resources
+	resErr    error
 }
 
 type stubAuditStore struct {
@@ -116,6 +120,10 @@ func (s *stubTenantStore) GetTenant(ctx context.Context, tenantID string) (*mode
 
 func (s *stubTenantStore) ListTenants(ctx context.Context) ([]model.Tenant, error) {
 	return s.tenants, s.err
+}
+
+func (s *stubTenantStore) TenantResources(ctx context.Context, tenantID string) (cost.Resources, error) {
+	return s.resources, s.resErr
 }
 
 func newTestTenantHandler(s *stubWorkflowStarter, store TenantStore) *TenantHandler {
@@ -1106,4 +1114,66 @@ func optionalQuery(q string) string {
 		return ""
 	}
 	return "?" + q
+}
+
+func TestCostTenant(t *testing.T) {
+	tests := []struct {
+		name       string
+		tenant     *model.Tenant
+		storeErr   error
+		resources  cost.Resources
+		resErr     error
+		wantStatus int
+		wantBody   string
+	}{
+		{
+			name:   "returns measured resources and estimate",
+			tenant: &model.Tenant{TenantID: "acme", Status: model.TenantStatusActive, IsolationMode: model.IsolationModeDedicated},
+			resources: cost.Resources{
+				StorageBytes:       1024 * 1024 * 1024,
+				IsolationMode:      string(model.IsolationModeDedicated),
+				WorkflowExecutions: 10,
+				BackupCount:        1,
+			},
+			wantStatus: http.StatusOK,
+			wantBody:   `"total":17.721`,
+		},
+		{
+			name:       "not found",
+			storeErr:   repository.ErrNotFound,
+			wantStatus: http.StatusNotFound,
+			wantBody:   "tenant not found",
+		},
+		{
+			name:       "measurement failure",
+			tenant:     &model.Tenant{TenantID: "acme"},
+			resErr:     errors.New("db down"),
+			wantStatus: http.StatusInternalServerError,
+			wantBody:   "failed to measure tenant resources",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newTestTenantHandler(&stubWorkflowStarter{}, &stubTenantStore{
+				tenant:    tt.tenant,
+				err:       tt.storeErr,
+				resources: tt.resources,
+				resErr:    tt.resErr,
+			})
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants/acme/cost", nil)
+			req.SetPathValue("tenantID", "acme")
+			rec := httptest.NewRecorder()
+
+			h.CostTenant(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if !strings.Contains(rec.Body.String(), tt.wantBody) {
+				t.Errorf("body = %q, want to contain %q", rec.Body.String(), tt.wantBody)
+			}
+		})
+	}
 }

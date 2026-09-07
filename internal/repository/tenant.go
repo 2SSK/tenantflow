@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/2SSK/tenantflow/internal/cost"
 	"github.com/2SSK/tenantflow/internal/model"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -30,6 +31,10 @@ type TenantRepository interface {
 	// transition is guarded, so concurrent workflows (e.g. provision racing
 	// delete) can never clobber each other's writes.
 	UpdateTenantStatusFrom(ctx context.Context, tenantID string, status model.TenantStatus, allowedFrom ...model.TenantStatus) error
+	// TenantResources returns the measured metadata the cost estimator needs:
+	// real database size from pg_database, the isolation tier, workflow run
+	// counts (last 30 days) and retained backup count.
+	TenantResources(ctx context.Context, tenantID string) (cost.Resources, error)
 }
 
 type PostgresTenantRepository struct {
@@ -64,6 +69,79 @@ func (r *PostgresTenantRepository) GetTenant(ctx context.Context, tenantID strin
 		return nil, err
 	}
 	return t, nil
+}
+
+// TenantResources measures one tenant's resource metadata. The database
+// lookup is exception-safe: pg_database_size would raise an error for a
+// missing database, so the CASE guards it. Counts come from the workflow
+// ledger and the backups table; the ledger counts every execution started in
+// the last 30 days (completed runs are mirrored as "running" — the recorder
+// only flips failed ones), which is the honest available proxy for usage.
+func (r *PostgresTenantRepository) TenantResources(ctx context.Context, tenantID string) (cost.Resources, error) {
+	var (
+		res           cost.Resources
+		workflowCount int64
+		backupCount   int64
+	)
+	err := r.pool.QueryRow(ctx, `
+	SELECT
+		CASE WHEN EXISTS (SELECT 1 FROM pg_database WHERE datname = 'tenant_' || $1)
+			THEN pg_database_size('tenant_' || $1)
+			ELSE 0 END,
+		t.isolation_mode,
+		(SELECT count(*) FROM workflow_instances w WHERE w.tenant_id = t.tenant_id
+			AND w.started_at > now() - interval '30 days'),
+		(SELECT count(*) FROM backups b WHERE b.tenant_id = t.tenant_id
+			AND b.status = 'completed')
+	FROM tenants t
+	WHERE t.tenant_id = $1`,
+		tenantID).Scan(&res.StorageBytes, &res.IsolationMode, &workflowCount, &backupCount)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return cost.Resources{}, ErrNotFound
+		}
+		return cost.Resources{}, fmt.Errorf("measure resources for tenant %s: %w", tenantID, err)
+	}
+	res.WorkflowExecutions = int(workflowCount)
+	res.BackupCount = int(backupCount)
+	return res, nil
+}
+
+// ListTenantResources measures every tenant in one query, for the per-scrape
+// Prometheus cost collector. A missing tenant database counts as 0 bytes —
+// the whole scrape must not fail because one tenant's database is gone.
+func (r *PostgresTenantRepository) ListTenantResources(ctx context.Context) ([]cost.TenantResources, error) {
+	rows, err := r.pool.Query(ctx, `
+	SELECT t.tenant_id, t.isolation_mode,
+		CASE WHEN EXISTS (SELECT 1 FROM pg_database WHERE datname = 'tenant_' || t.tenant_id)
+			THEN pg_database_size('tenant_' || t.tenant_id) ELSE 0 END,
+		(SELECT count(*) FROM workflow_instances w WHERE w.tenant_id = t.tenant_id
+			AND w.started_at > now() - interval '30 days'),
+		(SELECT count(*) FROM backups b WHERE b.tenant_id = t.tenant_id AND b.status = 'completed')
+	FROM tenants t`)
+	if err != nil {
+		return nil, fmt.Errorf("measure all tenant resources: %w", err)
+	}
+	defer rows.Close()
+
+	out := []cost.TenantResources{}
+	for rows.Next() {
+		var (
+			tr            cost.TenantResources
+			workflowCount int64
+			backupCount   int64
+		)
+		if err := rows.Scan(&tr.TenantID, &tr.Resources.IsolationMode, &tr.Resources.StorageBytes, &workflowCount, &backupCount); err != nil {
+			return nil, fmt.Errorf("measure all tenant resources: %w", err)
+		}
+		tr.Resources.WorkflowExecutions = int(workflowCount)
+		tr.Resources.BackupCount = int(backupCount)
+		out = append(out, tr)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("measure all tenant resources: %w", err)
+	}
+	return out, nil
 }
 
 // UpdateTenantStatusFrom is the atomic status transition: the UPDATE carries
