@@ -127,6 +127,21 @@ TOKEN=$(curl -s -X POST http://localhost:8081/realms/tenantflow/protocol/openid-
 
 A dedicated tenant pays the compute/memory floor (~$17.52/mo) whether or not it stores anything — like a reserved instance; a shared tenant floors at ~$4.38/mo. The Prometheus collector (`internal/cost`) measures every tenant on each scrape, so a deleted tenant can never leave a stale cost series behind.
 
+## Database ownership
+
+Every tenant database is born with a **dedicated owner role** and locked against PUBLIC — the isolation shape a real database-per-tenant SaaS hands off to the tenant application:
+
+| Database | Owner | PUBLIC connect |
+|---|---|---|
+| `tenant_demo-b` | `tenant_demo-b` | denied |
+| `tenant_owner-demo` | `tenant_owner-demo` | denied |
+| `tenantflow` (platform) | `temporal` | allowed |
+
+- `CreateDatabase` ensures role `tenant_<id>` (idempotent), makes it the database `OWNER`, and runs `REVOKE CONNECT ... FROM PUBLIC`. The role has no password (`NOLOGIN` by default) — credential delivery to tenant apps is deliberately deferred; this commit establishes the *ownership* contract.
+- **Auxiliary databases reuse the role**: migrate (`_new`) and backup verification (`_temp`) borrow the tenant's own role instead of minting throwaway ones, so the count of tenant roles is always one per tenant.
+- **Migration preserves ownership**: `_new` is born owned by `tenant_<id>`, so `ALTER DATABASE ... RENAME` (which keeps the owner) promotes it into the live name with the isolation shape intact.
+- **Terminal teardown drops the role**: the provision saga's `DropTenantDatabase` compensation drops the database *then* `DropTenantRole`. Migrate's switch does NOT drop the role — it is not a terminal teardown.
+
 ## Reliability & recovery design
 
 - **Durable workflows**: every operation survives worker crashes and restarts (Temporal replays history).

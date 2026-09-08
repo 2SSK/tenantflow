@@ -136,6 +136,14 @@ func (a *ProvisionActivities) DropTenantDatabase(ctx context.Context, tenantID s
 		return fmt.Errorf("drop database for tenant %s: %w", tenantID, err)
 	}
 
+	// This compensation is the ONLY terminal teardown of a tenant's database,
+	// so the dedicated owner role has nothing left to own — drop it too.
+	// (Migrate's SwitchTraffic also drops a live DB but must NOT drop the role:
+	// the promoted _new DB is owned by it.)
+	if err := a.provider.DropTenantRole(ctx, tenantID); err != nil {
+		return fmt.Errorf("drop owner role for tenant %s: %w", tenantID, err)
+	}
+
 	return a.auditRepo.WriteEvent(ctx, &model.AuditEvent{
 		TenantID:  tenantID,
 		EventType: model.AuditEventTenantProvisionRolledBack,

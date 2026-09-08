@@ -836,7 +836,8 @@ Next.js app in `web/`:
 
 ### Multitenancy
 
-- [ ] What database-per-tenant buys you (isolation, noise, restore isolation) and costs you (connection bloat, migrations ×N, management)
+- [x] What database-per-tenant buys you (isolation, noise, restore isolation) and costs you (connection bloat, migrations ×N, management)
+- [x] Dedicated owner role per tenant DB + `REVOKE CONNECT ... FROM PUBLIC`; role lifetime decoupled from DB lifetime (migrate/backup aux DBs reuse the role; only terminal teardown drops it) — implemented in `internal/cloud` + covered by `TestMigratePromotionKeepsOwnership`
 - [ ] What shared-schema buys you (cheap, easy analytics) and costs you (noisy neighbor, RLS needs)
 - [ ] How `tenant_id` scoping must be enforced at the repository layer (one missed `WHERE tenant_id = ?` = cross-tenant leak)
 - [ ] When to use Postgres Row-Level Security (RLS) instead of app-level filtering

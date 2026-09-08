@@ -12,6 +12,15 @@ type CloudProvider interface {
 	CreateDatabase(ctx context.Context, tenantID string) error
 	DropDatabase(ctx context.Context, tenantID string) error
 
+	// DropTenantRole removes the dedicated owner role (tenant_<id>) that
+	// CreateDatabase ensures for every tenant database. It is deliberately a
+	// SEPARATE step from DropDatabase: migrate's SwitchTraffic drops the old
+	// live DB while the tenant's new DB (owned by the same role) is being
+	// promoted, so dropping the role there would orphan the promoted database.
+	// Call this only at a TERMINAL teardown, after the tenant's databases are
+	// gone.
+	DropTenantRole(ctx context.Context, tenantID string) error
+
 	// CreateDatabaseNamed/DropDatabaseNamed operate on an explicitly named DB
 	// (e.g. tenant_<id>_new or tenant_<id>_temp) that migrate/backup create
 	// alongside the live DB.

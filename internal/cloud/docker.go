@@ -62,7 +62,84 @@ func (d *DockerProvider) CreateDatabaseNamed(ctx context.Context, dbName string)
 		return err
 	}
 	d.log.Info("creating database", "database", dbName)
-	return d.execPostgres(ctx, fmt.Sprintf(`CREATE DATABASE "%s"`, dbName))
+	if err := d.execPostgres(ctx, fmt.Sprintf(`CREATE DATABASE "%s"`, dbName)); err != nil {
+		return err
+	}
+	return d.applyDatabaseOwnership(ctx, dbName)
+}
+
+// tenantOwnerRole derives the dedicated owner role for a tenant database.
+// Tenant databases are named tenant_<id> with optional auxiliary suffixes
+// (_new = migrate target, _temp = backup verification); the owner role is
+// ALWAYS the unsuffixed tenant_<id>. Migrate and backup therefore reuse the
+// role the tenant already owns instead of minting throwaway ones.
+func tenantOwnerRole(dbName string) (string, error) {
+	role := dbName
+	switch {
+	case strings.HasSuffix(role, "_new"):
+		role = strings.TrimSuffix(role, "_new")
+	case strings.HasSuffix(role, "_temp"):
+		role = strings.TrimSuffix(role, "_temp")
+	}
+	if err := validateIdentifier(role); err != nil {
+		return "", fmt.Errorf("derive owner role from %q: %w", dbName, err)
+	}
+	return role, nil
+}
+
+// ownershipStatements returns the SQL that establishes the "database-per-tenant
+// with a dedicated owner role" isolation shape for a tenant database:
+//
+//  1. ensure the per-tenant role exists (idempotent — DO block + IF NOT EXISTS,
+//     because migrate/backup re-apply this to an already-existing role)
+//  2. make that role the database OWNER
+//  3. revoke CONNECT from PUBLIC so only the owner role (and superusers, who
+//     bypass access checks) can connect to the tenant's database
+//
+// The identifiers are validated by the caller (validateIdentifier) before they
+// get here, so none can contain quotes or semicolons.
+func ownershipStatements(dbName string) ([]string, error) {
+	if err := validateIdentifier(dbName); err != nil {
+		return nil, err
+	}
+	role, err := tenantOwnerRole(dbName)
+	if err != nil {
+		return nil, err
+	}
+	return []string{
+		fmt.Sprintf(`DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '%s') THEN CREATE ROLE "%s"; END IF; END $$;`, role, role),
+		fmt.Sprintf(`ALTER DATABASE "%s" OWNER TO "%s"`, dbName, role),
+		fmt.Sprintf(`REVOKE CONNECT ON DATABASE "%s" FROM PUBLIC`, dbName),
+	}, nil
+}
+
+// applyDatabaseOwnership runs the ownership statements for a tenant database.
+// They are idempotent, so this is safe both on Temporal retries and when the
+// database already exists (migrate/backup create auxiliary DBs for a tenant
+// whose role is already present).
+func (d *DockerProvider) applyDatabaseOwnership(ctx context.Context, dbName string) error {
+	stmts, err := ownershipStatements(dbName)
+	if err != nil {
+		return err
+	}
+	for _, stmt := range stmts {
+		if err := d.execPostgres(ctx, stmt); err != nil {
+			return fmt.Errorf("apply ownership for database %s: %w", dbName, err)
+		}
+	}
+	return nil
+}
+
+// DropTenantRole removes the dedicated owner role after a tenant's databases
+// are gone. It is idempotent (DROP ROLE IF EXISTS). See CloudProvider's
+// DropTenantRole doc for why it must NOT be folded into DropDatabase.
+func (d *DockerProvider) DropTenantRole(ctx context.Context, tenantID string) error {
+	if err := validateIdentifier(tenantID); err != nil {
+		return err
+	}
+	role := tenantDatabaseName(tenantID)
+	d.log.Info("dropping tenant role", "role", role)
+	return d.execPostgres(ctx, fmt.Sprintf(`DROP ROLE IF EXISTS "%s"`, role))
 }
 
 func (d *DockerProvider) DropDatabaseNamed(ctx context.Context, dbName string) error {
