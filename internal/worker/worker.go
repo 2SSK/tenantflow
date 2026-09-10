@@ -40,6 +40,7 @@ func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, auditRe
 	migrate := activities.NewMigrateActivities(auditRepo, provider)
 	backup := activities.NewBackupActivities(backupRepo, auditRepo, provider)
 	restore := activities.NewRestoreActivities(backupRepo, auditRepo, provider)
+	reconcile := activities.NewReconcileActivities(repo, auditRepo, backupRepo, provider, reg)
 
 	// Interceptor order matters: the metrics interceptor is OUTERMOST so it
 	// observes the final result of every activity attempt including failures
@@ -63,6 +64,7 @@ func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, auditRe
 		tfworkflow.BackupTenantWorkflow,
 		tfworkflow.RestoreTenantWorkflow,
 		tfworkflow.DeleteTenantWorkflow,
+		tfworkflow.ReconcileTenantWorkflow,
 	})
 
 	registerActivities(sdk, []activityRegistration{
@@ -102,6 +104,13 @@ func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, auditRe
 		{fn: restore.MarkTenantRestored, name: activities.MarkTenantRestoredActivityName},
 		{fn: restore.RestoreRollback, name: activities.RestoreRollbackActivityName},
 		{fn: restore.MarkTenantRestoreFailed, name: activities.MarkTenantRestoreFailedActivityName},
+		{fn: reconcile.ResolveTenantSpec, name: activities.ResolveTenantSpecActivityName},
+		{fn: reconcile.ProbeTenantActualState, name: activities.ProbeTenantActualStateActivityName},
+		{fn: reconcile.EnsureTenantDatabase, name: activities.EnsureTenantDatabaseActivityName},
+		{fn: reconcile.RecordReconcileDrift, name: activities.RecordReconcileDriftActivityName},
+		{fn: reconcile.MarkReconcileConverged, name: activities.MarkReconcileConvergedActivityName},
+		{fn: reconcile.MarkReconcileSkipped, name: activities.MarkReconcileSkippedActivityName},
+		{fn: reconcile.MarkReconcileFailed, name: activities.MarkReconcileFailedActivityName},
 	})
 
 	return &Worker{log: log, sdk: sdk}

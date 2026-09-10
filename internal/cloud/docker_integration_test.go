@@ -181,3 +181,123 @@ func TestMigratePromotionKeepsOwnership(t *testing.T) {
 		t.Errorf("PUBLIC can CONNECT after promotion; ownership shape lost")
 	}
 }
+
+// InspectDatabase is the provider half of reconciliation's actual state: it
+// must report the world as it is (exists, owner, PUBLIC CONNECT), and must
+// cross-check against the same direct queries the other tests use.
+func TestInspectDatabaseReportsReality(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(t)
+	provider := integrationProvider(t)
+
+	tenantID := uniqueTenantID("it-inspect")
+	live := "tenant_" + tenantID
+	role := live
+
+	if err := provider.CreateDatabase(ctx, tenantID); err != nil {
+		t.Fatalf("CreateDatabase: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = provider.DropDatabase(ctx, tenantID)
+		_ = provider.DropTenantRole(ctx, tenantID)
+	})
+
+	state, err := provider.InspectDatabase(ctx, live)
+	if err != nil {
+		t.Fatalf("InspectDatabase(%s): %v", live, err)
+	}
+	if !state.Exists {
+		t.Errorf("InspectDatabase: %s should exist", live)
+	}
+	if state.OwnerRole != role {
+		t.Errorf("InspectDatabase owner = %q, want %q (cross-check: %q)",
+			state.OwnerRole, role, databaseOwner(ctx, pool, live))
+	}
+	if state.PublicConnect {
+		t.Errorf("InspectDatabase: PUBLIC CONNECT reported open (cross-check: %v)",
+			publicCanConnect(t, ctx, pool, live))
+	}
+
+	// A database that does not exist must be reported as such, with no owner.
+	missing := "tenant_" + uniqueTenantID("it-ghost")
+	st, err := provider.InspectDatabase(ctx, missing)
+	if err != nil {
+		t.Fatalf("InspectDatabase(%s): %v", missing, err)
+	}
+	if st.Exists {
+		t.Errorf("InspectDatabase(%s) reported exists=true for a missing DB", missing)
+	}
+	if st.OwnerRole != "" || st.PublicConnect {
+		t.Errorf("InspectDatabase(%s) reported owner/connect for a missing DB: %+v", missing, st)
+	}
+
+	exists, err := provider.RoleExists(ctx, role)
+	if err != nil {
+		t.Fatalf("RoleExists(%s): %v", role, err)
+	}
+	if !exists {
+		t.Errorf("RoleExists(%s) = false, want true", role)
+	}
+	ghostRole := "tenant_" + uniqueTenantID("it-ghost")
+	exists, err = provider.RoleExists(ctx, ghostRole)
+	if err != nil {
+		t.Fatalf("RoleExists(%s): %v", ghostRole, err)
+	}
+	if exists {
+		t.Errorf("RoleExists(%s) = true, want false", ghostRole)
+	}
+}
+
+// EnsureDatabaseOwnership must repair a sabotaged database back to the
+// isolation shape — this is the reconciliation repair path against reality.
+func TestEnsureDatabaseOwnershipRepairsDrift(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(t)
+	provider := integrationProvider(t)
+
+	tenantID := uniqueTenantID("it-repair")
+	live := "tenant_" + tenantID
+	role := live
+
+	if err := provider.CreateDatabase(ctx, tenantID); err != nil {
+		t.Fatalf("CreateDatabase: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = provider.DropDatabase(ctx, tenantID)
+		_ = provider.DropTenantRole(ctx, tenantID)
+	})
+
+	// Sabotage the isolation boundary exactly like a real drift:
+	// 1. steal ownership (ALTER DATABASE OWNER TO) - pg_dump restores or an
+	//    operator's manual fix can clobber ownership;
+	// 2. re-open CONNECT to PUBLIC - a careless GRANT opens the tenant DB.
+	if err := provider.execPostgres(ctx, fmt.Sprintf(`ALTER DATABASE "%s" OWNER TO temporal`, live)); err != nil {
+		t.Fatalf("sabotage owner: %v", err)
+	}
+	if err := provider.execPostgres(ctx, fmt.Sprintf(`GRANT CONNECT ON DATABASE "%s" TO PUBLIC`, live)); err != nil {
+		t.Fatalf("sabotage connect: %v", err)
+	}
+
+	if got := databaseOwner(ctx, pool, live); got != "temporal" {
+		t.Fatalf("precondition: owner = %q, want temporal (drifted)", got)
+	}
+	if !publicCanConnect(t, ctx, pool, live) {
+		t.Fatalf("precondition: PUBLIC CONNECT should be open (drifted)")
+	}
+
+	if err := provider.EnsureDatabaseOwnership(ctx, live); err != nil {
+		t.Fatalf("EnsureDatabaseOwnership: %v", err)
+	}
+
+	if got := databaseOwner(ctx, pool, live); got != role {
+		t.Errorf("owner after repair = %q, want %q", got, role)
+	}
+	if publicCanConnect(t, ctx, pool, live) {
+		t.Errorf("PUBLIC CONNECT still open after repair")
+	}
+
+	// Running it again must be a no-op (idempotency for Temporal retries).
+	if err := provider.EnsureDatabaseOwnership(ctx, live); err != nil {
+		t.Errorf("EnsureDatabaseOwnership second run: %v", err)
+	}
+}

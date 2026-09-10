@@ -53,6 +53,17 @@ type Registry struct {
 	// and result ("completed" | "failed"). Attempts are counted as they
 	// happen, so retries are visible — useful for the fail-matrix story.
 	ActivityExecutions *prometheus.CounterVec
+
+	// ReconcileRuns counts reconciliation outcomes by result. The label set
+	// is deliberately tiny (no tenant_id): per-tenant detail lives in the
+	// database and audit events, while Prometheus aggregates platform-wide —
+	// per-tenant labels would be a cardinality trap at scale.
+	ReconcileRuns *prometheus.CounterVec
+
+	// DriftEvents counts each drift kind detected during reconciliation
+	// (missing_database, missing_role, ownership, public_connect,
+	// missing_backup). Same cardinality discipline as ReconcileRuns.
+	DriftEvents *prometheus.CounterVec
 }
 
 // New builds a Registry with the custom collectors and the Go/process
@@ -72,10 +83,20 @@ func New() *Registry {
 			Name: "tenantflow_activity_executions_total",
 			Help: "Worker activity executions by activity and result.",
 		}, []string{"activity", "result"}),
+		ReconcileRuns: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "tenantflow_reconcile_runs_total",
+			Help: "Reconciliation workflow outcomes: converged, repaired, skipped, failed.",
+		}, []string{"result"}),
+		DriftEvents: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "tenantflow_drift_events_total",
+			Help: "Drift kinds detected during reconciliation.",
+		}, []string{"kind"}),
 	}
 	r.mustRegister(
 		r.HTTPRequests,
 		r.ActivityExecutions,
+		r.ReconcileRuns,
+		r.DriftEvents,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)

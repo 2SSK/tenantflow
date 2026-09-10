@@ -1,6 +1,7 @@
 package cloud
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -79,5 +80,49 @@ func TestOwnershipStatements(t *testing.T) {
 func TestOwnershipStatementsRejectsInvalidDBName(t *testing.T) {
 	if _, err := ownershipStatements(`tenant_x"; DROP SCHEMA public; --`); err == nil {
 		t.Fatal("ownershipStatements accepted an injection attempt")
+	}
+}
+
+func TestParseBoolOut(t *testing.T) {
+	tests := []struct {
+		in   string
+		want bool
+	}{
+		{in: "t", want: true},
+		{in: "T", want: true},
+		{in: "f", want: false},
+		{"", false},
+		{"true", true},
+		{"1", true},
+		{"yes", true},
+		{"on", true},
+		{"  t  ", true}, // psql -t -A can leave surrounding whitespace
+	}
+	for _, tt := range tests {
+		if got := parseBoolOut(tt.in); got != tt.want {
+			t.Errorf("parseBoolOut(%q) = %v, want %v", tt.in, got, tt.want)
+		}
+	}
+}
+
+// The read primitives must reject unsafe identifiers BEFORE touching the
+// docker client, so a nil client is enough to prove the validation path.
+func TestInspectMethodsRejectInvalidNames(t *testing.T) {
+	p := &DockerProvider{}
+	for _, name := range []string{
+		`tenant_x"; DROP SCHEMA public; --`,
+		"tenant x",
+		`tenant_x"`,
+		"",
+	} {
+		if _, err := p.InspectDatabase(context.Background(), name); err == nil {
+			t.Errorf("InspectDatabase(%q): want error for invalid identifier", name)
+		}
+		if _, err := p.RoleExists(context.Background(), name); err == nil {
+			t.Errorf("RoleExists(%q): want error for invalid identifier", name)
+		}
+		if err := p.EnsureDatabaseOwnership(context.Background(), name); err == nil {
+			t.Errorf("EnsureDatabaseOwnership(%q): want error for invalid identifier", name)
+		}
 	}
 }

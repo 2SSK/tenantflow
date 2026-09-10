@@ -690,6 +690,35 @@ Next.js app in `web/`:
 - [ ] Blog posts (draft list in Showable Artifacts)
 - [ ] Deploy demo somewhere reachable (Render/Railway/Fly or homelab) + link from portfolio
 
+### Phase 10 — Reconciliation (desired vs actual state)
+
+> **Feature freeze.** The plane's job is now convergence, not new surface area.
+
+- [x] Provider read API: `InspectDatabase` (exists/owner/PUBLIC CONNECT), `RoleExists`, idempotent `EnsureDatabaseOwnership`
+- [x] `ReconcileTenantWorkflow`: resolve spec → probe actual → detect drift → repair (reuse existing activities) → re-probe → converge
+- [x] Drift kinds: `missing_database`, `missing_role`, `ownership`, `public_connect`, `missing_backup`
+- [x] Unrepairable/non-active tenants: reconcile runs, audits `SKIPPED`, converges by construction
+- [x] `POST /api/v1/tenants/{id}/reconcile` (admin, 202, 409 on in-flight duplicate) → audit trail `TENANT_RECONCILE_*`
+- [x] Metrics: `tenantflow_reconcile_runs_total{result}`, `tenantflow_drift_events_total{kind}` (no per-tenant label → no cardinality trap)
+- [x] Tests: workflow converged / repaired / still-drifted paths; provider unit + real-postgres integration
+- [x] Live demo: sabotage a tenant's DB, reconcile, show repair + audit + Prometheus-format metrics (:9091)
+
+### Phase 11 — Hardening & docs (no new features)
+
+- [ ] `docs/idempotency.md`: operation × repeated-execution table (create/drop DB, role, migration, backup, restore)
+- [ ] `docs/failure-matrix.md`: every failure point × expected result; automate gaps of the failmatrix
+- [ ] CI: GitHub Actions `test.yml` (fmt check→vet→build→unit) + `integration.yml` (postgres service container)
+- [ ] Security: secrets audit, `.env.example` review, `dependabot.yml`, `SECURITY.md`, `LICENSE`, `CONTRIBUTING.md`, `Makefile`
+- [ ] ADRs 0001–0007 (Temporal, DB-per-tenant, shared schema, saga, owner roles, provider abstraction, soft delete)
+
+### Phase 12 — Portfolio ship
+
+- [ ] README rewrite: 60-second story (`What? Why? How? Demo?`), architecture diagram, demo GIF slot
+- [ ] Load test: 100 tenants end-to-end; publish only real, measured p50/p95/p99 + failure rate
+- [ ] Demo video 60–120s: happy path → chaos failure → saga → DLQ retry → reconcile repair
+- [ ] Live showcase **$0**: docs site (Vercel/Netlify) + live tunnel (Tailscale Funnel / Cloudflare) or Oracle Always Free
+- [ ] Blog posts from the Showable Artifacts draft list
+
 ---
 
 ## 12. Implementation Progress Tracker
@@ -802,16 +831,60 @@ Next.js app in `web/`:
 | 8.4 | Fail-every-activity test matrix        | ☑      |
 | 8.5 | Workflow versioning demo               | ☑      |
 
-### Phase 9 — Ship
+### Phase 9 — Observability & ship
 
 | #   | Task                             | Status |
 | --- | -------------------------------- | ------ |
-| 9.1 | Metrics + Grafana                | ☐      |
+| 9.1 | Prometheus metrics (API + worker) + Grafana dashboard | ☑ |
 | 9.2 | Per-tenant cost view (stretch)   | ☑ |
 | 9.3 | README + screenshots             | ☑ |
 | 9.4 | Demo video                       | ☐      |
 | 9.5 | Blog posts                       | ☐      |
 | 9.6 | Live deployment + portfolio link | ☐      |
+
+### Phase 10 — Reconciliation (desired vs actual state)
+
+> **Feature freeze starts here.** The control-plane surface (provision, migrate,
+> backup, restore, delete, upgrade, DLQ, cost, observability) is complete. The
+> next level of maturity is proving the plane can **detect drift, repair it,
+> and converge back to the desired tenant state** — the Kubernetes-inspired
+> pattern. No new user-facing features after Phase 10 except where a Phase 11/12
+> hardening or portfolio item requires it.
+
+| #   | Task                                                       | Status |
+| --- | ---------------------------------------------------------- | ------ |
+| 10.1| Provider read API (`InspectDatabase`, `RoleExists`, `EnsureDatabaseOwnership`) | ☑ |
+| 10.2| `ReconcileTenantWorkflow`: spec → probe → detect drift → repair → re-probe → converge | ☑ |
+| 10.3| Drift kinds: missing DB, missing owner role, wrong owner, PUBLIC CONNECT open, missing backup | ☑ |
+| 10.4| `POST /api/v1/tenants/{id}/reconcile` (admin) + audit events | ☑ |
+| 10.5| Reconcile metrics (`tenantflow_reconcile_runs_total`, `tenantflow_drift_events_total`) | ☑ |
+| 10.6| Workflow unit tests (converged / repaired / unrepairable paths) | ☑ |
+| 10.7| Provider integration tests (probe real postgres: exists/owner/revoked/missing) | ☑ |
+| 10.8| Live demo: sabotage a tenant DB, run reconcile, show repair + audit trail | ☑ |
+| 10.9| `docs/architecture.md` (or ADR) reconciliation section | ☐ |
+
+### Phase 11 — Hardening & docs (no new features)
+
+| #   | Task                                                       | Status |
+| --- | ---------------------------------------------------------- | ------ |
+| 11.1| `docs/idempotency.md` — table of every op × repeated execution | ☐ |
+| 11.2| Idempotency audit: fix any non-idempotent op found          | ☐ |
+| 11.3| `docs/failure-matrix.md` — map failmatrix tests + gaps      | ☐ |
+| 11.4| CI: `.github/workflows/test.yml` (build, vet, unit tests on push/PR) | ☐ |
+| 11.5| CI: integration workflow (postgres service container, `-tags integration`) | ☐ |
+| 11.6| Security pass: creds in git audit, `.env.example` review, dependabot | ☐ |
+| 11.7| `SECURITY.md`, `LICENSE`, `CONTRIBUTING.md`, `Makefile`     | ☐ |
+| 11.8| ADRs 0001–0007 (`docs/adr/`)                               | ☐ |
+
+### Phase 12 — Portfolio ship
+
+| #   | Task                                                       | Status |
+| --- | ---------------------------------------------------------- | ------ |
+| 12.1| README rewrite: 60-second story, architecture diagram, demo | ☐ |
+| 12.2| Load test: 100 tenants, publish only real measured numbers  | ☐ |
+| 12.3| Demo video (60–120s: happy path + failure + DLQ + reconcile)| ☐ |
+| 12.4| Live showcase ($0: docs site + Tailscale/Cloudflare tunnel or Oracle free VM) | ☐ |
+| 12.5| Blog posts (draft list in Showable Artifacts)               | ☐ |
 
 ---
 

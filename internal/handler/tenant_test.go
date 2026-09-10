@@ -1177,3 +1177,100 @@ func TestCostTenant(t *testing.T) {
 		})
 	}
 }
+
+func TestReconcileTenantAccepted(t *testing.T) {
+	stub := &stubWorkflowStarter{}
+	store := &stubTenantStore{tenant: &model.Tenant{TenantID: "acme-rec", Status: model.TenantStatusActive}}
+	h := newTestTenantHandler(stub, store)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tenants/acme-rec/reconcile", nil)
+	req.SetPathValue("tenantID", "acme-rec")
+	rec := httptest.NewRecorder()
+
+	h.ReconcileTenant(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var got ReconcileTenantResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if got.WorkflowID != "reconcile-acme-rec" {
+		t.Errorf("expected workflowID reconcile-acme-rec, got %q", got.WorkflowID)
+	}
+	if got.Status != "reconciling" {
+		t.Errorf("expected status reconciling, got %q", got.Status)
+	}
+
+	if stub.startedOptions.ID != "reconcile-acme-rec" {
+		t.Errorf("expected workflow ID reconcile-acme-rec, got %s", stub.startedOptions.ID)
+	}
+	if stub.startedOptions.TaskQueue != tfworkflow.TaskQueue {
+		t.Errorf("unexpected task queue %v", &stub.startedOptions.TaskQueue)
+	}
+	if stub.startedOptions.WorkflowIDReusePolicy != enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE {
+		t.Errorf("expected ALLOW_DUPLICATE reuse policy, got %v", &stub.startedOptions.WorkflowIDReusePolicy)
+	}
+	if !stub.startedOptions.WorkflowExecutionErrorWhenAlreadyStarted {
+		t.Errorf("expected WorkflowExecutionErrorWhenAlreadyStarted to be true")
+	}
+	in, ok := stub.startedArgs[0].(tfworkflow.ReconcileInput)
+	if !ok || in.TenantID != "acme-rec" {
+		t.Errorf("unexpected workflow input: %#v", stub.startedArgs)
+	}
+}
+
+func TestReconcileTenantNotFound(t *testing.T) {
+	store := &stubTenantStore{err: repository.ErrNotFound}
+	h := newTestTenantHandler(&stubWorkflowStarter{}, store)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tenants/ghost/reconcile", nil)
+	req.SetPathValue("tenantID", "ghost")
+	rec := httptest.NewRecorder()
+
+	h.ReconcileTenant(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestReconcileTenantAlreadyInFlight(t *testing.T) {
+	stub := &stubWorkflowStarter{
+		err: serviceerror.NewWorkflowExecutionAlreadyStarted("already started", "reconcile-acme-rec", "run-1"),
+	}
+	store := &stubTenantStore{tenant: &model.Tenant{TenantID: "acme-rec", Status: model.TenantStatusActive}}
+	h := newTestTenantHandler(stub, store)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tenants/acme-rec/reconcile", nil)
+	req.SetPathValue("tenantID", "acme-rec")
+	rec := httptest.NewRecorder()
+
+	h.ReconcileTenant(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestReconcileTenantRejectsInvalidTenantID(t *testing.T) {
+	stub := &stubWorkflowStarter{}
+	h := newTestTenantHandler(stub, &stubTenantStore{})
+
+	for _, id := range []string{"bad.id", "has space", "with/slash", strings.Repeat("a", 57)} {
+		req := httptest.NewRequest(http.MethodPost, "/", nil)
+		req.SetPathValue("tenantID", id)
+		rec := httptest.NewRecorder()
+
+		h.ReconcileTenant(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for tenantID %q, got %d", id, rec.Code)
+		}
+		if len(stub.startedArgs) != 0 {
+			t.Errorf("workflow started for invalid tenantID %q", id)
+		}
+	}
+}

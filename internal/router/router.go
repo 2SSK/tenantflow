@@ -42,6 +42,7 @@ func New(tc handler.WorkflowStarter, store handler.TenantStore, auditStore handl
 	root.Handle("POST /api/v1/tenants/{tenantID}/migrate", admin(tenants.MigrateTenant))
 	root.Handle("POST /api/v1/tenants/{tenantID}/backup", admin(tenants.BackupTenant))
 	root.Handle("POST /api/v1/tenants/{tenantID}/restore", admin(tenants.RestoreTenant))
+	root.Handle("POST /api/v1/tenants/{tenantID}/reconcile", admin(tenants.ReconcileTenant))
 
 	// DLQ + recovery routes
 	root.Handle("GET /api/v1/failed-runs", admin(tenants.ListFailedRuns))

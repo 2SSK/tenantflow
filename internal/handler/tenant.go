@@ -90,6 +90,14 @@ type CreateTenantResponse struct {
 	Status     string `json:"status"`
 }
 
+// ReconcileTenantResponse is returned with HTTP 202 Accepted when a
+// reconciliation run has been started for the tenant.
+type ReconcileTenantResponse struct {
+	TenantID   string `json:"tenantID"`
+	WorkflowID string `json:"workflowID"`
+	Status     string `json:"status"`
+}
+
 // TenantResponse is the DTO returned by GET /api/v1/tenants/{tenantID}
 type TenantResponse struct {
 	TenantID      string    `json:"tenantID"`
@@ -249,6 +257,66 @@ func (h *TenantHandler) CreateTenant(w http.ResponseWriter, r *http.Request) {
 		TenantID:   req.TenantID,
 		WorkflowID: run.GetID(),
 		Status:     "provisioning",
+	})
+}
+
+// ReconcileTenant handles POST /api/v1/tenants/{tenantID}/reconcile.
+//
+// It kicks a ReconcileTenantWorkflow in the background and returns 202; the
+// workflow's audit events (and the reconcile metrics) are the record of what
+// it found and fixed. A second request while a run is in flight is rejected
+// with 409 — reconciling the same tenant concurrently would both probe and
+// repair the same infrastructure, which is exactly the duplicate work the
+// workflow ID de-duplicates.
+func (h *TenantHandler) ReconcileTenant(w http.ResponseWriter, r *http.Request) {
+	tenantID := r.PathValue("tenantID")
+	if !tenantIDPattern.MatchString(tenantID) {
+		writeError(w, http.StatusBadRequest, "tenantID must match ^[a-zA-Z0-9_-]{1,56}$")
+		return
+	}
+
+	// The workflow itself skips non-active tenants, but we still 404 unknown
+	// IDs so an operator typo fails loudly instead of silently converging.
+	if _, err := h.store.GetTenant(r.Context(), tenantID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "tenant not found")
+			return
+		}
+		h.log.Error("get tenant before reconcile", "tenantID", tenantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to look up tenant")
+		return
+	}
+
+	workflowID := "reconcile-" + tenantID
+
+	// ALLOW_DUPLICATE (not REJECT_DUPLICATE like the one-shot provision/delete
+	// workflows): reconciliation must be RE-RUNNABLE at any time — a closed,
+	// successful run doesn't make the tenant immune to future drift. Temporal
+	// still refuses to start a new run while the previous one is in flight
+	// (WorkflowExecutionAlreadyStarted → 409), so concurrency is deduped
+	// while re-runs after completion are permitted.
+	run, err := h.temporal.ExecuteWorkflow(r.Context(), client.StartWorkflowOptions{
+		ID:                                       workflowID,
+		TaskQueue:                                tfworkflow.TaskQueue,
+		WorkflowIDReusePolicy:                    enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
+		WorkflowExecutionErrorWhenAlreadyStarted: true,
+	}, tfworkflow.ReconcileTenantWorkflow, tfworkflow.ReconcileInput{TenantID: tenantID})
+	if err != nil {
+		var already *serviceerror.WorkflowExecutionAlreadyStarted
+		if errors.As(err, &already) {
+			writeError(w, http.StatusConflict, "reconciliation already in progress for this tenant")
+			return
+		}
+		h.log.Error("start reconcile workflow", "tenantID", tenantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to start reconciliation workflow")
+		return
+	}
+
+	h.log.Info("reconcile workflow started", "tenantID", tenantID, "workflowID", run.GetID())
+	writeJSON(w, http.StatusAccepted, ReconcileTenantResponse{
+		TenantID:   tenantID,
+		WorkflowID: run.GetID(),
+		Status:     "reconciling",
 	})
 }
 

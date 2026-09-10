@@ -32,6 +32,14 @@ const (
 	AuditEventTenantDeleteResumed       AuditEventType = "TENANT_DELETE_RESUMED"
 	AuditEventTenantReprovisionReq      AuditEventType = "TENANT_REPROVISION_REQUESTED"
 	AuditEventTenantProvisionRolledBack AuditEventType = "TENANT_PROVISION_ROLLED_BACK"
+	// Reconciliation (desired vs actual state) events. Drift detection and
+	// repair are audit-visible so operators can prove the control plane
+	// converges the tenant back to its desired state.
+	AuditEventTenantReconcileStarted   AuditEventType = "TENANT_RECONCILE_STARTED"
+	AuditEventTenantDriftDetected      AuditEventType = "TENANT_DRIFT_DETECTED"
+	AuditEventTenantReconcileConverged AuditEventType = "TENANT_RECONCILE_CONVERGED"
+	AuditEventTenantReconcileSkipped   AuditEventType = "TENANT_RECONCILE_SKIPPED"
+	AuditEventTenantReconcileFailed    AuditEventType = "TENANT_RECONCILE_FAILED"
 )
 
 type AuditEvent struct {

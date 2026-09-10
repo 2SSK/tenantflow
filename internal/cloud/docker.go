@@ -10,6 +10,7 @@ import (
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
 )
 
 // backupDir is where pg_dump artifacts live *inside the postgres container*.
@@ -48,6 +49,14 @@ func (d *DockerProvider) DropDatabase(ctx context.Context, tenantID string) erro
 
 func tenantDatabaseName(tenantID string) string {
 	return "tenant_" + tenantID
+}
+
+// TenantDatabaseName returns the control plane's database name for a tenant
+// (tenant_<id>). Non-cloud packages (reconciliation activities, tests) need
+// the naming rule the provider uses so probes and reports target the exact
+// database the provider manages instead of re-deriving it independently.
+func TenantDatabaseName(tenantID string) string {
+	return tenantDatabaseName(tenantID)
 }
 
 func validateIdentifier(id string) error {
@@ -140,6 +149,72 @@ func (d *DockerProvider) DropTenantRole(ctx context.Context, tenantID string) er
 	role := tenantDatabaseName(tenantID)
 	d.log.Info("dropping tenant role", "role", role)
 	return d.execPostgres(ctx, fmt.Sprintf(`DROP ROLE IF EXISTS "%s"`, role))
+}
+
+// InspectDatabase reports the isolation posture of a database as observed
+// from the running server: does it exist, who owns it, and does PUBLIC still
+// hold CONNECT. This is the provider half of reconciliation's "actual state".
+func (d *DockerProvider) InspectDatabase(ctx context.Context, dbName string) (DatabaseState, error) {
+	if err := validateIdentifier(dbName); err != nil {
+		return DatabaseState{}, err
+	}
+	d.log.Info("inspecting database", "database", dbName)
+
+	state := DatabaseState{}
+	out, err := d.queryPostgres(ctx, fmt.Sprintf(
+		`SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = '%s')`, dbName))
+	if err != nil {
+		return DatabaseState{}, fmt.Errorf("inspect database %s (exists): %w", dbName, err)
+	}
+	state.Exists = parseBoolOut(out)
+
+	if !state.Exists {
+		return state, nil
+	}
+
+	out, err = d.queryPostgres(ctx, fmt.Sprintf(
+		`SELECT COALESCE(r.rolname, '') FROM pg_database d LEFT JOIN pg_roles r ON r.oid = d.datdba WHERE d.datname = '%s'`, dbName))
+	if err != nil {
+		return DatabaseState{}, fmt.Errorf("inspect database %s (owner): %w", dbName, err)
+	}
+	state.OwnerRole = out
+
+	out, err = d.queryPostgres(ctx, fmt.Sprintf(
+		`SELECT has_database_privilege('public', '%s', 'CONNECT')`, dbName))
+	if err != nil {
+		return DatabaseState{}, fmt.Errorf("inspect database %s (connect): %w", dbName, err)
+	}
+	state.PublicConnect = parseBoolOut(out)
+
+	return state, nil
+}
+
+// RoleExists reports whether a role currently exists. Reconciliation treats a
+// missing dedicated owner role as drift: the tenant database must have one.
+func (d *DockerProvider) RoleExists(ctx context.Context, roleName string) (bool, error) {
+	if err := validateIdentifier(roleName); err != nil {
+		return false, err
+	}
+	d.log.Info("checking role exists", "role", roleName)
+	out, err := d.queryPostgres(ctx, fmt.Sprintf(
+		`SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = '%s')`, roleName))
+	if err != nil {
+		return false, fmt.Errorf("role exists %s: %w", roleName, err)
+	}
+	return parseBoolOut(out), nil
+}
+
+// EnsureDatabaseOwnership re-applies the tenant ownership statements to an
+// existing database: create the owner role if missing, set it as OWNER, and
+// revoke CONNECT from PUBLIC. Idempotent by construction, so it is the
+// "repair ownership" primitive reconciliation calls when the owner role or
+// PUBLIC CONNECT has drifted.
+func (d *DockerProvider) EnsureDatabaseOwnership(ctx context.Context, dbName string) error {
+	if err := validateIdentifier(dbName); err != nil {
+		return err
+	}
+	d.log.Info("ensuring database ownership", "database", dbName)
+	return d.applyDatabaseOwnership(ctx, dbName)
 }
 
 func (d *DockerProvider) DropDatabaseNamed(ctx context.Context, dbName string) error {
@@ -267,6 +342,59 @@ func (d *DockerProvider) execPostgres(ctx context.Context, sql string) error {
 		return fmt.Errorf("psql exited with code %d running: %s", inspect.ExitCode, sql)
 	}
 	return nil
+}
+
+// queryPostgres runs a single statement via psql with -t -A (tuples only,
+// unaligned) and returns the trimmed output — used for scalar reads like
+// EXISTS(...) and COALESCE(...). Unlike execPostgres it ATTACHES to the exec
+// so psql's output is actually captured instead of discarded. The hijacked
+// stream MULTIPLEXES stdout and stderr (8-byte frame headers per write), so
+// it is demuxed with stdcopy: stdout carries the query result, stderr carries
+// psql errors. Callers must pre-validate any interpolated identifiers
+// (validateIdentifier) so no value can break out of the SQL string.
+func (d *DockerProvider) queryPostgres(ctx context.Context, sql string) (string, error) {
+	postgresID, err := d.findPostgresContainer(ctx)
+	if err != nil {
+		return "", err
+	}
+	execResp, err := d.client.ContainerExecCreate(ctx, postgresID, container.ExecOptions{
+		Cmd:          []string{"psql", "-U", "temporal", "-t", "-A", "-c", sql},
+		AttachStdout: true,
+		AttachStderr: true,
+	})
+	if err != nil {
+		return "", fmt.Errorf("exec create: %w", err)
+	}
+	resp, err := d.client.ContainerExecAttach(ctx, execResp.ID, container.ExecAttachOptions{})
+	if err != nil {
+		return "", fmt.Errorf("exec attach: %w", err)
+	}
+	defer resp.Close()
+
+	var stdout, stderr strings.Builder
+	if _, err := stdcopy.StdCopy(&stdout, &stderr, resp.Reader); err != nil {
+		return "", fmt.Errorf("exec read: %w", err)
+	}
+	inspect, err := d.client.ContainerExecInspect(ctx, execResp.ID)
+	if err != nil {
+		return "", fmt.Errorf("exec inspect: %w", err)
+	}
+	if inspect.ExitCode != 0 {
+		return "", fmt.Errorf("psql exited with code %d running: %s: %s",
+			inspect.ExitCode, sql, strings.TrimSpace(stderr.String()))
+	}
+	return strings.TrimSpace(stdout.String()), nil
+}
+
+// parseBoolOut interprets psql -t -A boolean output ("t"/"f") and the
+// common textual variants of booleans defensively.
+func parseBoolOut(out string) bool {
+	switch strings.ToLower(strings.TrimSpace(out)) {
+	case "t", "true", "1", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 // findPostgresContainer returns the ID of the running postgres container.

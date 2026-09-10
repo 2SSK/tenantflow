@@ -2,6 +2,20 @@ package cloud
 
 import "context"
 
+// DatabaseState is a read-only snapshot of a database's isolation posture,
+// observed from the running server (not from control-plane records). It is
+// the provider-facing half of reconciliation's "actual state".
+type DatabaseState struct {
+	// Exists reports whether the database currently exists.
+	Exists bool
+	// OwnerRole is the database owner's role name, or "" when the database
+	// does not exist.
+	OwnerRole string
+	// PublicConnect reports whether the PUBLIC pseudo-role still holds
+	// CONNECT on the database. A dedicated tenant database has it revoked.
+	PublicConnect bool
+}
+
 // CloudProvider is the boundary between the control plane (workflows) and the
 // real infrastructure (Docker in this MVP). Each method is one unit of
 // infrastructure work, so a Temporal activity can call it, persist its result,
@@ -45,4 +59,23 @@ type CloudProvider interface {
 	// RenameDatabase renames an existing DB (used by migrate to promote the
 	// <tenant>_new DB into the live <tenant> name after validation).
 	RenameDatabase(ctx context.Context, from string, to string) error
+
+	// Read primitives for reconciliation (desired vs actual state):
+	//
+	// InspectDatabase reports whether a database exists and, if so, its owner
+	// role and whether PUBLIC still holds CONNECT — the isolation posture the
+	// control plane must converge back to when it drifts.
+	InspectDatabase(ctx context.Context, dbName string) (DatabaseState, error)
+
+	// RoleExists reports whether a role (e.g. a tenant's dedicated owner role)
+	// currently exists. Missing role = drift, because the tenant database must
+	// have a dedicated owner.
+	RoleExists(ctx context.Context, roleName string) (bool, error)
+
+	// EnsureDatabaseOwnership re-applies the tenant ownership statements for an
+	// existing database: create the owner role if missing, set it as OWNER, and
+	// revoke CONNECT from PUBLIC. Every statement is idempotent, so it is safe
+	// to call repeatedly — this is the "repair ownership" primitive
+	// reconciliation uses when the owner or PUBLIC CONNECT has drifted.
+	EnsureDatabaseOwnership(ctx context.Context, dbName string) error
 }
