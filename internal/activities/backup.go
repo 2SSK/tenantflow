@@ -7,7 +7,6 @@ import (
 	"github.com/2SSK/tenantflow/internal/cloud"
 	"github.com/2SSK/tenantflow/internal/model"
 	"github.com/2SSK/tenantflow/internal/repository"
-	"go.temporal.io/sdk/activity"
 )
 
 const (
@@ -36,7 +35,7 @@ func tempDBName(tenantID string) string {
 }
 
 func (a *BackupActivities) MarkTenantBackingUp(ctx context.Context, tenantID string) error {
-	activity.GetLogger(ctx).Info("Marking tenant as backing up", "tenantID", tenantID)
+	logFor(ctx).Info("Marking tenant as backing up", "tenantID", tenantID)
 	return a.auditRepo.WriteEvent(ctx, &model.AuditEvent{
 		TenantID:  tenantID,
 		EventType: model.AuditEventTenantBackingUp,
@@ -56,7 +55,7 @@ func (a *BackupActivities) MarkTenantBackingUp(ctx context.Context, tenantID str
 // created it returns (nil, err); on failure after creation the record is marked
 // failed but still returned alongside the error.
 func (a *BackupActivities) BackupTenantData(ctx context.Context, tenantID string) (*model.Backup, error) {
-	log := activity.GetLogger(ctx)
+	log := logFor(ctx)
 	log.Info("Backing up tenant data", "tenantID", tenantID)
 
 	backupName, err := a.provider.SnapshotDatabase(ctx, tenantID)
@@ -75,6 +74,15 @@ func (a *BackupActivities) BackupTenantData(ctx context.Context, tenantID string
 
 	// Verify the dump is restorable before trusting it.
 	tempDB := tempDBName(tenantID)
+	// Idempotency: the _temp DB has a fixed per-tenant name. If a previous
+	// attempt of this activity crashed after CREATE but before DROP, the stale
+	// DB would make the retry fail with "database already exists", sending the
+	// backup into the DLQ for a cleanup a human must do by hand. Pre-drop it:
+	// _temp is a disposable verification artifact, safe to rebuild from scratch,
+	// and DropDatabaseNamed is idempotent (DROP ... IF EXISTS).
+	if err := a.provider.DropDatabaseNamed(ctx, tempDB); err != nil {
+		return nil, fmt.Errorf("pre-drop stale temp database for backup verification: %w", err)
+	}
 	if err := a.provider.CreateDatabaseNamed(ctx, tempDB); err != nil {
 		a.markFailed(ctx, rec.ID)
 		return rec, fmt.Errorf("create temp database for backup verification: %w", err)
@@ -108,7 +116,7 @@ func (a *BackupActivities) BackupTenantData(ctx context.Context, tenantID string
 }
 
 func (a *BackupActivities) MarkTenantBackedUp(ctx context.Context, tenantID string, backupID int64, filename string) error {
-	activity.GetLogger(ctx).Info("Marking tenant as backed up", "tenantID", tenantID, "backupID", backupID)
+	logFor(ctx).Info("Marking tenant as backed up", "tenantID", tenantID, "backupID", backupID)
 	return a.auditRepo.WriteEvent(ctx, &model.AuditEvent{
 		TenantID:  tenantID,
 		EventType: model.AuditEventTenantBackupCreated,
@@ -124,7 +132,7 @@ func (a *BackupActivities) MarkTenantBackedUp(ctx context.Context, tenantID stri
 // that the backup did not complete on the timeline. Any created backup record
 // was already marked failed inside BackupTenantData.
 func (a *BackupActivities) MarkTenantBackupFailed(ctx context.Context, tenantID string) error {
-	activity.GetLogger(ctx).Info("Marking tenant backup as failed", "tenantID", tenantID)
+	logFor(ctx).Info("Marking tenant backup as failed", "tenantID", tenantID)
 	return a.auditRepo.WriteEvent(ctx, &model.AuditEvent{
 		TenantID:  tenantID,
 		EventType: model.AuditEventTenantBackupFailed,
@@ -135,12 +143,12 @@ func (a *BackupActivities) MarkTenantBackupFailed(ctx context.Context, tenantID 
 
 func (a *BackupActivities) markFailed(ctx context.Context, id int64) {
 	if err := a.repo.MarkBackupFailed(ctx, id); err != nil {
-		activity.GetLogger(ctx).Error("mark backup failed", "backupID", id, "error", err)
+		logFor(ctx).Error("mark backup failed", "backupID", id, "error", err)
 	}
 }
 
 func (a *BackupActivities) dropTemp(ctx context.Context, dbName string) {
 	if err := a.provider.DropDatabaseNamed(ctx, dbName); err != nil {
-		activity.GetLogger(ctx).Error("drop temp database", "database", dbName, "error", err)
+		logFor(ctx).Error("drop temp database", "database", dbName, "error", err)
 	}
 }

@@ -7,7 +7,6 @@ import (
 	"github.com/2SSK/tenantflow/internal/cloud"
 	"github.com/2SSK/tenantflow/internal/model"
 	"github.com/2SSK/tenantflow/internal/repository"
-	"go.temporal.io/sdk/activity"
 )
 
 const (
@@ -38,7 +37,7 @@ func tenantDBName(tenantID string) string {
 }
 
 func (a *RestoreActivities) MarkTenantRestoring(ctx context.Context, tenantID string) error {
-	activity.GetLogger(ctx).Info("Marking tenant as restoring", "tenantID", tenantID)
+	logFor(ctx).Info("Marking tenant as restoring", "tenantID", tenantID)
 	return a.auditRepo.WriteEvent(ctx, &model.AuditEvent{
 		TenantID:  tenantID,
 		EventType: model.AuditEventTenantRestoring,
@@ -54,7 +53,7 @@ func (a *RestoreActivities) MarkTenantRestoring(ctx context.Context, tenantID st
 // can pass it to the compensation. (The snapshot is ephemeral - it exists to
 // unwind a bad restore, not to be listed as a durable backup.)
 func (a *RestoreActivities) PreRestoreSnapshot(ctx context.Context, tenantID string) (string, error) {
-	activity.GetLogger(ctx).Info("Taking pre-restore safety snapshot", "tenantID", tenantID)
+	logFor(ctx).Info("Taking pre-restore safety snapshot", "tenantID", tenantID)
 	return a.provider.SnapshotDatabase(ctx, tenantID)
 }
 
@@ -64,7 +63,7 @@ func (a *RestoreActivities) PreRestoreSnapshot(ctx context.Context, tenantID str
 // the restored data; on failure the live DB may be partially overwritten, which
 // is why the saga keeps the pre-restore snapshot to roll back with.
 func (a *RestoreActivities) RestoreData(ctx context.Context, tenantID string, backupID int64) error {
-	log := activity.GetLogger(ctx)
+	log := logFor(ctx)
 	log.Info("Restoring tenant data", "tenantID", tenantID, "backupID", backupID)
 
 	backup, err := a.repo.GetBackup(ctx, backupID)
@@ -87,7 +86,7 @@ func (a *RestoreActivities) RestoreData(ctx context.Context, tenantID string, ba
 }
 
 func (a *RestoreActivities) MarkTenantRestored(ctx context.Context, tenantID string, backupID int64) error {
-	activity.GetLogger(ctx).Info("Marking tenant as restored", "tenantID", tenantID, "backupID", backupID)
+	logFor(ctx).Info("Marking tenant as restored", "tenantID", tenantID, "backupID", backupID)
 	return a.auditRepo.WriteEvent(ctx, &model.AuditEvent{
 		TenantID:  tenantID,
 		EventType: model.AuditEventTenantRestored,
@@ -103,7 +102,7 @@ func (a *RestoreActivities) MarkTenantRestored(ctx context.Context, tenantID str
 // to be sure the live DB is back to its pre-restore state is to overwrite it
 // with that snapshot.
 func (a *RestoreActivities) RestoreRollback(ctx context.Context, tenantID, preBackupName string) error {
-	log := activity.GetLogger(ctx)
+	log := logFor(ctx)
 	log.Info("Rolling back restore from pre-restore snapshot", "tenantID", tenantID, "preBackupName", preBackupName)
 	if err := a.provider.RestoreDatabaseFromBackup(ctx, tenantDBName(tenantID), preBackupName); err != nil {
 		return fmt.Errorf("rollback restore for tenant %s: %w", tenantID, err)
@@ -121,7 +120,7 @@ func (a *RestoreActivities) RestoreRollback(ctx context.Context, tenantID, preBa
 }
 
 func (a *RestoreActivities) MarkTenantRestoreFailed(ctx context.Context, tenantID string) error {
-	activity.GetLogger(ctx).Info("Marking tenant restore as failed", "tenantID", tenantID)
+	logFor(ctx).Info("Marking tenant restore as failed", "tenantID", tenantID)
 	return a.auditRepo.WriteEvent(ctx, &model.AuditEvent{
 		TenantID:  tenantID,
 		EventType: model.AuditEventTenantRestoreFailed,

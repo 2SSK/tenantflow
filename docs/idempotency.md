@@ -1,0 +1,184 @@
+# Idempotency
+
+*What happens when an operation runs twice — and why it is safe.*
+
+Temporal retries activities. Every activity boundary is therefore a place
+where a side effect may be executed **more than once**: the worker runs an
+activity, the side effect commits, the worker dies before reporting success,
+and the retry executes the side effect again. Idempotency is what makes those
+retries safe.
+
+This document answers the reviewer question *"what happens if you run X
+twice?"* for every operation in TenantFlow, records the audit that verified
+the answers, and states the rules new operations must follow to stay safe.
+
+---
+
+## 1. The execution model
+
+```
+workflow execution          activity          side effect
+(wf-<tenant>)               (retries on crash)
+     │                           │
+     ├── CreateTenantRecord ─────┼── INSERT tenants (ON CONFLICT DO NOTHING)
+     ├── ProvisionTenant ────────┼── CREATE DATABASE + ownership
+     │                           │        │
+     │                           │        └── worker dies here ──► retry runs
+     │                           │            ProvisionTenant AGAIN
+     │                           │
+     ├── MarkTenantActive ───────┼── UPDATE tenants SET status
+     └── ...                     │
+```
+
+Two properties protect us:
+
+1. **Workflow-ID dedupe** — provision/migrate/backup/restore/upgrade/delete
+   all start with `workflow-<tenantID>` and `WorkflowIDReusePolicy=REJECT_DUPLICATE`,
+   so an open (or completed) saga can never be double-started. Reconcile uses
+   `ALLOW_DUPLICATE` deliberately: re-running after closure is its whole point,
+   while an in-flight run still errors with `AlreadyStarted`.
+2. **Activity-level idempotency** — even WITHIN one workflow, a single activity
+   can be retried after a crash. That is where the interesting bugs live (see
+   §3).
+
+The audit below therefore distinguishes "safe because it can only run once"
+from "safe even if it runs again".
+
+---
+
+## 2. The inventory
+
+Glossary of the primitives and what they do, so the table in §3 stays honest:
+
+| Provider primitive | Behavior |
+|---|---|
+| `CreateDatabase` / `CreateDatabaseNamed` | `CREATE DATABASE` + ownership statements. Fails if the DB already exists. **Not idempotent on its own** — callers must guard (check-then-act). |
+| `DropDatabase` / `DropDatabaseNamed` | Terminates connections, then `DROP DATABASE IF EXISTS`. Idempotent. |
+| `DropTenantRole` | `DROP ROLE IF EXISTS`. Idempotent. |
+| `EnsureDatabaseOwnership` | `DO $$ … IF NOT EXISTS CREATE ROLE`, `ALTER DATABASE … OWNER TO`, `REVOKE CONNECT … FROM PUBLIC`. All three statements are idempotent. |
+| `InspectDatabase` / `RoleExists` / `ValidateDatabase` | Read-only probes. Trivially idempotent. |
+| `SnapshotDatabase` | `pg_dump` into a uniquely-named artifact. Re-running creates a second, equally valid dump (benign duplicate artifact). |
+| `RestoreDatabaseFromBackup` | Plain `psql -f` restore. **Not safe to re-run** after a partial restore ("relation already exists"); safe when the target DB was freshly created/emptied. |
+| `RenameDatabase` | `ALTER DATABASE … RENAME`. Fails if the source is missing (needs a forward-progress guard at the caller). |
+
+Temporal workflow-ID policies:
+
+| Workflow | Workflow ID | Reuse policy | Effect of starting again |
+|---|---|---|---|
+| Provision | `provision-<id>` | `REJECT_DUPLICATE` | Refused — both while open and after close. One saga per tenant, ever. |
+| Migrate | `migrate-<id>` | `REJECT_DUPLICATE` | Same. |
+| Backup / Restore / Upgrade / Delete | `<verb>-<id>` | `REJECT_DUPLICATE` | Same. |
+| Reconcile | `reconcile-<id>` | `ALLOW_DUPLICATE` | In-flight run → `AlreadyStarted` (409). *Completed* run → new run starts. Re-runnable by design. |
+
+---
+
+## 3. Operation × repeated execution
+
+Meaning of the columns:
+
+- **Retry-safe?** — can the operation be executed a second time after a crash
+  mid-way and still reach the correct end state?
+- **Mechanism** — *workflow* = protected by workflow-ID dedupe; *provider* =
+  the primitive itself is idempotent; *caller guard* = check/guard logic in
+  the activity.
+
+| Operation | Layer | Retry-safe? | Mechanism / notes |
+|---|---|---|---|
+| CreateTenantRecord | repo | ✅ | `INSERT … ON CONFLICT (tenant_id) DO NOTHING`. Re-run is a no-op. Verified by `TestCreateTenantIsIdempotent` (integration). |
+| ProvisionTenant (dedicated) | activity | ✅ | **Fixed in this audit** (§3.1): inspect-first, create only if missing, re-assert ownership when present. Previously a retry died with "database already exists". |
+| ProvisionTenant (shared) | activity | ✅ | No infrastructure created; only an idempotent audit write. |
+| MarkTenantActive / MarkTenantFailed / MarkTenantMigrated / … | activity | ✅ | Idempotent `UPDATE` / audit `WriteEvent`. |
+| DropTenantDatabase (compensation) | activity | ✅ | `DROP DATABASE IF EXISTS`. |
+| ProvisionTenantIdentity | activity | ⚠️ **Known gap** (§4.1) | Keycloak `POST /users` — a retried activity re-creating the user gets HTTP 409. Manual remediation: delete the user in Keycloak, or let reconcile skip (identity is not yet reconciled). |
+| AssignRole (identity) | activity | ⚠️ Known gap (§4.1) | Keycloak role-mapping POST is not idempotent. Same remediation. |
+| MigrateData | activity | ✅ | **Fixed in this audit** (§3.2): pre-drops the fixed-name `_new` DB before building, so a retry after a mid-way crash resumes cleanly. Snapshot artifact is new per run. |
+| SwitchTraffic | activity | ✅ | **Fixed in this audit** (§3.3): `_new` existence is the forward-progress sentinel. If `_new` is gone, the switch already happened → no-op success. Previously a retry re-dropped the live DB and destroyed a *completed* promotion (then self-healed from backup — data recovered, migration lost). |
+| DropTenantAuxDatabase (compensation) | activity | ✅ | `DROP … IF EXISTS` + idempotent audit write. |
+| BackupTenantData | activity | ✅ | **Fixed in this audit** (§3.4): pre-drops the fixed-name `_temp` verification DB. A lost-result retry may create a second, equally valid backup row — benign (immutable artifacts). |
+| RestoreData | activity | ⚠️ **Known gap** (§4.2) | Plain restore into the live DB. Retry after a partial restore hits "relation already exists". Mitigation: pre-restore snapshot exists for rollback; remediation = rollback, not re-run. |
+| PreRestoreSnapshot | activity | ✅ | New artifact per run. |
+| RestoreRollback | activity | ⚠️ Same as RestoreData | Same mitigation. |
+| Reconcile: ProbeTenantActualState | activity | ✅ | Read-only probes. |
+| Reconcile: EnsureTenantDatabase | activity | ✅ | Check-then-act: create only if missing, then re-assert ownership. |
+| Reconcile: RecordDrift / MarkConverged / MarkSkipped / MarkFailed | activity | ✅ | Idempotent. |
+| Reconcile workflow re-run | workflow | ✅ | `ALLOW_DUPLICATE`; converged runs re-run as fast-path no-ops. |
+| Docker-provider Read APIs | provider | ✅ | Read-only. |
+| Snapshot Database | provider | ✅ | New artifact each run (benign duplicate). |
+| CreateDatabase (raw) | provider | ❌ by itself | Must be guarded by callers. All callers guard today (§5 check-then-act). |
+
+---
+
+## 4. The audit findings
+
+The table above contains four fixes and two accepted gaps.
+
+### 4.1 Fixed in this audit
+
+**ProvisionTenant** (`internal/activities/provision.go`):
+the database created by a crashed attempt blocked the retry.
+Now: inspect → create if missing → re-assert ownership either way.
+Integration proof: `TestProvisionTenantResumesAfterPartialCreate`.
+
+**MigrateData** (`internal/activities/migrate.go`):
+the fixed-name `_new` database left behind by a crashed attempt blocked the
+retry. Now: pre-drop `_new` before building (it is a disposable artifact;
+`DROP … IF EXISTS` is idempotent).
+Integration proof: `TestMigrateDataResumesAfterStaleNewDB`.
+
+**SwitchTraffic** (`internal/activities/migrate.go`):
+a retry after the rename had already completed re-ran "drop live" and
+destroyed the freshly promoted database (self-healing then restored the
+*old* backup — data recovered, migration lost). Now: if `_new` no longer
+exists, the promotion already happened → no-op success.
+Integration proofs: `TestSwitchTrafficRetryIsIdempotent` (completed-switch
+retry) and `TestSwitchTrafficCompletesInterruptedSwitch` (mid-switch retry).
+
+**BackupTenantData** (`internal/activities/backup.go`):
+the fixed-name `_temp` verification database left behind by a crashed attempt
+blocked the retry. Now: pre-drop `_temp` before restoring into it.
+(The provider-level symmetric case is covered by the migrate procedure; no
+separate integration test because BackupTenantData needs a real repo — the
+pre-drop line is the identical pattern.)
+
+### 4.2 Accepted gaps (documented, not silent)
+
+**Keycloak identity provisioning.** `CreateUser` / `AssignRole` are not
+idempotent: a retry after a lost result gets a 409 from Keycloak and the
+workflow lands in the DLQ. Remediation today: delete the user in Keycloak and
+re-start, or leave the tenant to reconciliation (identity is not yet a
+reconciled resource). The proper fix is get-or-create (probe
+`GET /users?username=…` before `POST`), tracked for a future phase.
+Why accepted: the window is narrow (result lost *after* user creation), the
+blast radius is manual and documented, and the fix is isolated to the identity
+provider.
+
+**Restore into the live database.** `RestoreData` restores a plain dump into
+the live DB; a retry after a partial restore fails with "relation already
+exists". This is mitigated structurally: every restore is preceded by
+`PreRestoreSnapshot`, and the documented remediation for a broken restore is
+rollback to that snapshot — not re-running the restore. Making the restore
+itself idempotent (drop-all-then-restore inside a transaction, or archive-format
+dumps with `pg_restore --clean --if-exists`) is a future improvement.
+
+---
+
+## 5. Rules for new operations
+
+1. **Never write a raw `CREATE`** without a guard. Pattern: `InspectDatabase`
+   → create only if missing; or pre-drop disposable fixed-name artifacts.
+2. **Fixed-name disposable databases must be pre-dropped** before use
+   (`DROP … IF EXISTS`). Timestamped names need no pre-drop but leak garbage
+   on crashes.
+3. **Use a forward-progress sentinel for destructive multi-step operations.**
+   The `_new`-exists check in `SwitchTraffic` is the template: the sentinel
+   tells a retry "this step already completed — do not redo it".
+4. **Prefer `IF EXISTS` / `ON CONFLICT DO NOTHING` / `IF NOT EXISTS`** in every
+   destructive or insert-side effect.
+5. **Read APIs are your friends in retry paths** — probing before acting is
+   cheap and converges.
+6. **When an operation cannot be made idempotent**, say so in this document
+   and provide the manual remediation. A documented, narrow gap beaten by an
+   undocumented one.
+7. **Prove it.** New activity-level retry behavior gets an integration test
+   that simulates the crash residue and asserts convergence
+   (`internal/activities/migrate_integration_test.go` is the template).

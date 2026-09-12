@@ -9,7 +9,6 @@ import (
 	"github.com/2SSK/tenantflow/internal/cloud"
 	"github.com/2SSK/tenantflow/internal/model"
 	"github.com/2SSK/tenantflow/internal/repository"
-	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 )
 
@@ -32,7 +31,7 @@ func NewProvisionActivities(repo repository.TenantRepository, auditRepo reposito
 }
 
 func (a *ProvisionActivities) CreateTenantRecord(ctx context.Context, tenantID string, workflowID string, isolationMode string) error {
-	activity.GetLogger(ctx).Info("Creating tenant record", "tenantID", tenantID)
+	logFor(ctx).Info("Creating tenant record", "tenantID", tenantID)
 
 	mode := model.IsolationMode(isolationMode)
 	if mode == "" {
@@ -60,7 +59,7 @@ func (a *ProvisionActivities) CreateTenantRecord(ctx context.Context, tenantID s
 }
 
 func (a *ProvisionActivities) ProvisionTenant(ctx context.Context, tenantID string, isolationMode string) error {
-	activity.GetLogger(ctx).Info("Provision tenant", "tenantID", tenantID, "isolationMode", isolationMode)
+	logFor(ctx).Info("Provision tenant", "tenantID", tenantID, "isolationMode", isolationMode)
 
 	if strings.HasPrefix(tenantID, "fail-") {
 		return fmt.Errorf("simulated provisioning failure for tenant %s", tenantID)
@@ -69,8 +68,22 @@ func (a *ProvisionActivities) ProvisionTenant(ctx context.Context, tenantID stri
 	// Shared-schema tenants do NOT get their own database — they share the
 	// platform database and write into shared_* tables scoped by tenant_id.
 	if isolationMode != string(model.IsolationModeShared) {
-		if err := a.provider.CreateDatabase(ctx, tenantID); err != nil {
-			return fmt.Errorf("create database for tenant %s: %w", tenantID, err)
+		// Idempotency: a retried activity can find the database already created
+		// by the attempt that crashed before this call returned. Create only
+		// when missing (check-then-act), and re-assert the isolation posture
+		// when it exists — both provider operations are idempotent, so the
+		// retry converges instead of dying with "database already exists".
+		liveDB := tenantDBName(tenantID)
+		st, err := a.provider.InspectDatabase(ctx, liveDB)
+		if err != nil {
+			return fmt.Errorf("inspect database for tenant %s: %w", tenantID, err)
+		}
+		if !st.Exists {
+			if err := a.provider.CreateDatabase(ctx, tenantID); err != nil {
+				return fmt.Errorf("create database for tenant %s: %w", tenantID, err)
+			}
+		} else if err := a.provider.EnsureDatabaseOwnership(ctx, liveDB); err != nil {
+			return fmt.Errorf("ensure ownership for tenant %s: %w", tenantID, err)
 		}
 	}
 
@@ -83,7 +96,7 @@ func (a *ProvisionActivities) ProvisionTenant(ctx context.Context, tenantID stri
 }
 
 func (a *ProvisionActivities) MarkTenantActive(ctx context.Context, tenantID string) error {
-	activity.GetLogger(ctx).Info("Marking tenant active", "tenantID", tenantID)
+	logFor(ctx).Info("Marking tenant active", "tenantID", tenantID)
 
 	// Active is entered from "provisioning" (fresh provision) or "failed"
 	// (the retry endpoint restarts the same workflow on a failed tenant —
@@ -108,7 +121,7 @@ func (a *ProvisionActivities) MarkTenantActive(ctx context.Context, tenantID str
 }
 
 func (a *ProvisionActivities) MarkTenantFailed(ctx context.Context, tenantID string) error {
-	activity.GetLogger(ctx).Info("Marking tenant failed (saga compensation)", "tenantID", tenantID)
+	logFor(ctx).Info("Marking tenant failed (saga compensation)", "tenantID", tenantID)
 
 	// Saga compensation: from "provisioning" on a fresh failure, or from
 	// "failed" when a retried provision fails again. If a delete won the race
@@ -130,7 +143,7 @@ func (a *ProvisionActivities) MarkTenantFailed(ctx context.Context, tenantID str
 }
 
 func (a *ProvisionActivities) DropTenantDatabase(ctx context.Context, tenantID string) error {
-	activity.GetLogger(ctx).Info("Dropping tenant database (saga compensation)", "tenantID", tenantID)
+	logFor(ctx).Info("Dropping tenant database (saga compensation)", "tenantID", tenantID)
 
 	if err := a.provider.DropDatabase(ctx, tenantID); err != nil {
 		return fmt.Errorf("drop database for tenant %s: %w", tenantID, err)

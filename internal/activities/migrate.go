@@ -8,7 +8,6 @@ import (
 	"github.com/2SSK/tenantflow/internal/cloud"
 	"github.com/2SSK/tenantflow/internal/model"
 	"github.com/2SSK/tenantflow/internal/repository"
-	"go.temporal.io/sdk/activity"
 )
 
 const (
@@ -41,7 +40,7 @@ func newDBName(tenantID string) string {
 }
 
 func (a *MigrateActivities) MarkTenantMigrating(ctx context.Context, tenantID string) error {
-	activity.GetLogger(ctx).Info("Marking tenant as migrating", "tenantID", tenantID)
+	logFor(ctx).Info("Marking tenant as migrating", "tenantID", tenantID)
 	return a.auditRepo.WriteEvent(ctx, &model.AuditEvent{
 		TenantID:  tenantID,
 		EventType: model.AuditEventTenantMigrating,
@@ -57,11 +56,20 @@ func (a *MigrateActivities) MarkTenantMigrating(ctx context.Context, tenantID st
 // never touched.
 func (a *MigrateActivities) MigrateData(ctx context.Context, tenantID string) (string, error) {
 	newDB := newDBName(tenantID)
-	activity.GetLogger(ctx).Info("Migrating tenant data", "tenantID", tenantID, "target", newDB)
+	logFor(ctx).Info("Migrating tenant data", "tenantID", tenantID, "target", newDB)
 
 	backupName, err := a.provider.SnapshotDatabase(ctx, tenantID)
 	if err != nil {
 		return "", fmt.Errorf("snapshot tenant %s: %w", tenantID, err)
+	}
+
+	// Idempotency: _new is a fixed-name disposable artifact. If a previous
+	// attempt of this activity crashed after CREATE but before the drop on the
+	// error path, the retry would fail with "database already exists" and the
+	// migration would land in the DLQ. Pre-drop it so the activity is safe to
+	// re-run from any point; DropDatabaseNamed is idempotent (DROP IF EXISTS).
+	if err := a.provider.DropDatabaseNamed(ctx, newDB); err != nil {
+		return "", fmt.Errorf("pre-drop stale new database for tenant %s: %w", tenantID, err)
 	}
 
 	if err := a.provider.CreateDatabaseNamed(ctx, newDB); err != nil {
@@ -86,10 +94,27 @@ func (a *MigrateActivities) MigrateData(ctx context.Context, tenantID string) (s
 // If the rename fails after the drop, it restores the old data from the
 // backup back into the live name (self-healing) and returns an error so the
 // saga still knows the switch did not complete cleanly.
+//
+// The switch is guarded to be idempotent on Temporal retries: the _new DB is
+// the "forward progress" sentinel. If _new no longer exists, a previous
+// attempt already renamed it into place, so a retried activity is a no-op
+// (re-dropping live would otherwise destroy the freshly promoted database).
 func (a *MigrateActivities) SwitchTraffic(ctx context.Context, tenantID string, backupName string) error {
 	newDB := newDBName(tenantID)
 	liveDB := "tenant_" + tenantID
-	activity.GetLogger(ctx).Info("Switching traffic to new database", "tenantID", tenantID)
+	logFor(ctx).Info("Switching traffic to new database", "tenantID", tenantID)
+
+	newState, err := a.provider.InspectDatabase(ctx, newDB)
+	if err != nil {
+		return fmt.Errorf("inspect new database for tenant %s: %w", tenantID, err)
+	}
+	if !newState.Exists {
+		// _new is gone: either the switch already completed in a previous
+		// attempt (live now holds the promoted copy — leave it alone) or the
+		// activity this rancid call belongs to never built it. Both cases are
+		// "nothing to promote", so success is the honest answer.
+		return nil
+	}
 
 	if err := a.provider.DropDatabase(ctx, tenantID); err != nil {
 		return fmt.Errorf("drop live database for tenant %s: %w", tenantID, err)
@@ -106,7 +131,7 @@ func (a *MigrateActivities) SwitchTraffic(ctx context.Context, tenantID string, 
 }
 
 func (a *MigrateActivities) MarkTenantMigrated(ctx context.Context, tenantID string) error {
-	activity.GetLogger(ctx).Info("Marking tenant as migrated", "tenantID", tenantID)
+	logFor(ctx).Info("Marking tenant as migrated", "tenantID", tenantID)
 	return a.auditRepo.WriteEvent(ctx, &model.AuditEvent{
 		TenantID:  tenantID,
 		EventType: model.AuditEventTenantMigrated,
@@ -120,7 +145,7 @@ func (a *MigrateActivities) MarkTenantMigrated(ctx context.Context, tenantID str
 // a no-op if it was already renamed away or never created.
 func (a *MigrateActivities) DropTenantAuxDatabase(ctx context.Context, tenantID string) error {
 	newDB := newDBName(tenantID)
-	activity.GetLogger(ctx).Info("Dropping auxiliary database (compensation)", "tenantID", tenantID, "database", newDB)
+	logFor(ctx).Info("Dropping auxiliary database (compensation)", "tenantID", tenantID, "database", newDB)
 	if err := a.dropAux(ctx, newDB); err != nil {
 		return err
 	}
@@ -144,7 +169,7 @@ func (a *MigrateActivities) dropAux(ctx context.Context, dbName string) error {
 
 // MarkTenantMigrateFailed records that the migration saga did not complete.
 func (a *MigrateActivities) MarkTenantMigrateFailed(ctx context.Context, tenantID string) error {
-	activity.GetLogger(ctx).Info("Marking tenant migration as failed", "tenantID", tenantID)
+	logFor(ctx).Info("Marking tenant migration as failed", "tenantID", tenantID)
 	return a.auditRepo.WriteEvent(ctx, &model.AuditEvent{
 		TenantID:  tenantID,
 		EventType: model.AuditEventTenantMigrateFailed,

@@ -8,7 +8,6 @@ import (
 
 	"github.com/2SSK/tenantflow/internal/model"
 	"github.com/2SSK/tenantflow/internal/repository"
-	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 )
 
@@ -28,7 +27,7 @@ func NewDeprovisionActivities(repo repository.TenantRepository, auditRepo reposi
 }
 
 func (a *DeprovisionActivities) MarkTenantDeleting(ctx context.Context, tenantID string) error {
-	activity.GetLogger(ctx).Info("Marking tenant deleting", "tenantID", tenantID)
+	logFor(ctx).Info("Marking tenant deleting", "tenantID", tenantID)
 
 	// Deletion may only ENTER "deleting" from a stable state. If a concurrent
 	// lifecycle workflow (e.g. provision) won the race, the CAS fails. The
@@ -51,7 +50,7 @@ func (a *DeprovisionActivities) MarkTenantDeleting(ctx context.Context, tenantID
 }
 
 func (a *DeprovisionActivities) DeprovisionTenant(ctx context.Context, tenantID string) error {
-	activity.GetLogger(ctx).Info("Deprovision tenant", "tenantID", tenantID)
+	logFor(ctx).Info("Deprovision tenant", "tenantID", tenantID)
 
 	time.Sleep(2 * time.Second)
 
@@ -64,7 +63,7 @@ func (a *DeprovisionActivities) DeprovisionTenant(ctx context.Context, tenantID 
 }
 
 func (a *DeprovisionActivities) MarkTenantDeleted(ctx context.Context, tenantID string) error {
-	activity.GetLogger(ctx).Info("Marking tenant deleted", "tenantID", tenantID)
+	logFor(ctx).Info("Marking tenant deleted", "tenantID", tenantID)
 
 	// Teardown may only finish from "deleting". A fresh DELETE on an already
 	// deleted tenant fails here instead of silently succeeding — the DLQ

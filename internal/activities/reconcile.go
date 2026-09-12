@@ -45,7 +45,7 @@ func NewReconcileActivities(repo repository.TenantRepository, auditRepo reposito
 // platform policy derived from it. A missing row is non-retryable — the DLQ,
 // not infinite retries, is the right home for it.
 func (a *ReconcileActivities) ResolveTenantSpec(ctx context.Context, tenantID string) (model.TenantSpec, error) {
-	activity.GetLogger(ctx).Info("resolving tenant spec", "tenantID", tenantID)
+	logFor(ctx).Info("resolving tenant spec", "tenantID", tenantID)
 
 	tenant, err := a.repo.GetTenant(ctx, tenantID)
 	if err != nil {
@@ -71,7 +71,7 @@ func (a *ReconcileActivities) ResolveTenantSpec(ctx context.Context, tenantID st
 // All-or-nothing: if the probe cannot see infrastructure the workflow must
 // fail (and retry / DLQ), not reconcile blind.
 func (a *ReconcileActivities) ProbeTenantActualState(ctx context.Context, spec model.TenantSpec) (model.ReconcileActualState, error) {
-	activity.GetLogger(ctx).Info("probing tenant actual state", "tenantID", spec.TenantID, "isolationMode", spec.IsolationMode)
+	logFor(ctx).Info("probing tenant actual state", "tenantID", spec.TenantID, "isolationMode", spec.IsolationMode)
 
 	state := model.ReconcileActualState{TenantID: spec.TenantID}
 
@@ -146,7 +146,7 @@ func DetectDrifts(spec model.TenantSpec, actual model.ReconcileActualState) []st
 // call; an existing-but-drifted one is repaired in place. Both paths are
 // idempotent under Temporal retries.
 func (a *ReconcileActivities) EnsureTenantDatabase(ctx context.Context, tenantID string) error {
-	activity.GetLogger(ctx).Info("ensuring tenant database", "tenantID", tenantID)
+	logFor(ctx).Info("ensuring tenant database", "tenantID", tenantID)
 
 	dbName := cloud.TenantDatabaseName(tenantID)
 	state, err := a.provider.InspectDatabase(ctx, dbName)
@@ -169,7 +169,7 @@ func (a *ReconcileActivities) EnsureTenantDatabase(ctx context.Context, tenantID
 // platform-wide drift metric. Per-tenant drift detail lives in the audit
 // trail; the metric aggregates by kind only (no tenant label).
 func (a *ReconcileActivities) RecordReconcileDrift(ctx context.Context, tenantID string, kinds []string) error {
-	activity.GetLogger(ctx).Info("reconciliation drift detected", "tenantID", tenantID, "drifts", kinds)
+	logFor(ctx).Info("reconciliation drift detected", "tenantID", tenantID, "drifts", kinds)
 
 	for _, kind := range kinds {
 		if a.reg != nil {
@@ -182,7 +182,7 @@ func (a *ReconcileActivities) RecordReconcileDrift(ctx context.Context, tenantID
 // MarkReconcileConverged audits the outcome. result="converged" when nothing
 // had drifted, "repaired" when drift was fixed.
 func (a *ReconcileActivities) MarkReconcileConverged(ctx context.Context, tenantID string, repaired []string) error {
-	activity.GetLogger(ctx).Info("reconciliation converged", "tenantID", tenantID, "repaired", repaired)
+	logFor(ctx).Info("reconciliation converged", "tenantID", tenantID, "repaired", repaired)
 
 	result := "converged"
 	if len(repaired) > 0 {
@@ -198,7 +198,7 @@ func (a *ReconcileActivities) MarkReconcileConverged(ctx context.Context, tenant
 // status other than active converges by construction — failed/deleted tenants
 // are already compensated, deleting tenants are being torn down).
 func (a *ReconcileActivities) MarkReconcileSkipped(ctx context.Context, tenantID, reason string) error {
-	activity.GetLogger(ctx).Info("reconciliation skipped", "tenantID", tenantID, "reason", reason)
+	logFor(ctx).Info("reconciliation skipped", "tenantID", tenantID, "reason", reason)
 
 	if a.reg != nil {
 		a.reg.ReconcileRuns.WithLabelValues("skipped").Inc()
@@ -210,7 +210,7 @@ func (a *ReconcileActivities) MarkReconcileSkipped(ctx context.Context, tenantID
 // remained after repair, or the run errored past retries). The failed
 // workflow instance lands in the DLQ so an operator can retry it.
 func (a *ReconcileActivities) MarkReconcileFailed(ctx context.Context, tenantID, reason string) error {
-	activity.GetLogger(ctx).Info("reconciliation failed", "tenantID", tenantID, "reason", reason)
+	logFor(ctx).Info("reconciliation failed", "tenantID", tenantID, "reason", reason)
 
 	if a.reg != nil {
 		a.reg.ReconcileRuns.WithLabelValues("failed").Inc()

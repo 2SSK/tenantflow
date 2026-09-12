@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/2SSK/tenantflow/internal/identity"
-	"go.temporal.io/sdk/activity"
 )
 
 const (
@@ -24,7 +23,7 @@ func NewIdentityActivities(provider identity.IdentityProvider) *IdentityActiviti
 }
 
 func (a *IdentityActivities) ProvisionTenantIdentity(ctx context.Context, tenantID string) (string, error) {
-	logger := activity.GetLogger(ctx)
+	logger := logFor(ctx)
 	logger.Info("Provisioning tenant identity", "tenantID", tenantID)
 
 	username := tenantID + "-admin"
@@ -47,7 +46,7 @@ func (a *IdentityActivities) ProvisionTenantIdentity(ctx context.Context, tenant
 }
 
 func (a *IdentityActivities) DeleteTenantIdentity(ctx context.Context, userID string) error {
-	logger := activity.GetLogger(ctx)
+	logger := logFor(ctx)
 	logger.Info("Deleting tenant identity", "userID", userID)
 
 	if err := a.provider.DeleteUser(ctx, userID); err != nil {

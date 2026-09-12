@@ -6,7 +6,6 @@ import (
 
 	"github.com/2SSK/tenantflow/internal/model"
 	"github.com/2SSK/tenantflow/internal/repository"
-	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 )
 
@@ -34,7 +33,7 @@ func NewCancelDeleteActivities(repo repository.TenantRepository, auditRepo repos
 // this is a trivial state change — the expensive teardown only happens after
 // the timer expires.
 func (a *CancelDeleteActivities) RestoreTenantAfterCancel(ctx context.Context, tenantID string) error {
-	activity.GetLogger(ctx).Info("Restoring tenant after cancelled deletion", "tenantID", tenantID)
+	logFor(ctx).Info("Restoring tenant after cancelled deletion", "tenantID", tenantID)
 
 	// Cancel is only meaningful while the delete is in its grace period, i.e.
 	// the tenant is "deleting". If teardown already finished (or a fresh
@@ -58,7 +57,7 @@ func (a *CancelDeleteActivities) RestoreTenantAfterCancel(ctx context.Context, t
 // records that the soft-delete did not complete on the timeline so operators
 // can investigate why a tenant is stuck in "deleting".
 func (a *CancelDeleteActivities) MarkTenantDeleteFailed(ctx context.Context, tenantID string) error {
-	activity.GetLogger(ctx).Info("Marking tenant delete as failed", "tenantID", tenantID)
+	logFor(ctx).Info("Marking tenant delete as failed", "tenantID", tenantID)
 	return a.auditRepo.WriteEvent(ctx, &model.AuditEvent{
 		TenantID:  tenantID,
 		EventType: model.AuditEventTenantDeleteFailed,

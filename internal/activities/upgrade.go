@@ -7,7 +7,6 @@ import (
 	"github.com/2SSK/tenantflow/internal/billing"
 	"github.com/2SSK/tenantflow/internal/model"
 	"github.com/2SSK/tenantflow/internal/repository"
-	"go.temporal.io/sdk/activity"
 )
 
 const (
@@ -38,7 +37,7 @@ func NewUpgradeActivities(repo repository.TenantRepository, auditRepo repository
 }
 
 func (a *UpgradeActivities) VerifyTenantActive(ctx context.Context, tenantID string) (billing.Quota, error) {
-	activity.GetLogger(ctx).Info("Verifying tenant is active", "tenantID", tenantID)
+	logFor(ctx).Info("Verifying tenant is active", "tenantID", tenantID)
 
 	tenant, err := a.repo.GetTenant(ctx, tenantID)
 	if err != nil {
@@ -52,7 +51,7 @@ func (a *UpgradeActivities) VerifyTenantActive(ctx context.Context, tenantID str
 }
 
 func (a *UpgradeActivities) RaiseQuotas(ctx context.Context, tenantID string, old billing.Quota) (billing.Quota, error) {
-	activity.GetLogger(ctx).Info("Raising quotas", "tenantID", tenantID)
+	logFor(ctx).Info("Raising quotas", "tenantID", tenantID)
 
 	newQuota := billing.Quota{
 		MaxUsers:     old.MaxUsers * 2,
@@ -68,7 +67,7 @@ func (a *UpgradeActivities) RaiseQuotas(ctx context.Context, tenantID string, ol
 }
 
 func (a *UpgradeActivities) EnableFeatures(ctx context.Context, tenantID string, _ billing.Quota) error {
-	activity.GetLogger(ctx).Info("Enabling features", "tenantID", tenantID)
+	logFor(ctx).Info("Enabling features", "tenantID", tenantID)
 
 	// In a real system: call the feature-flag service to enable premium flags for the tenant
 
@@ -76,7 +75,7 @@ func (a *UpgradeActivities) EnableFeatures(ctx context.Context, tenantID string,
 }
 
 func (a *UpgradeActivities) UpdateBilling(ctx context.Context, tenantID string, _ billing.Quota) error {
-	activity.GetLogger(ctx).Info("Updating billing tier", "tenantID", tenantID)
+	logFor(ctx).Info("Updating billing tier", "tenantID", tenantID)
 
 	// In a real system: call the billing service to set the new tier and
 	// compute the prorated charge
@@ -85,7 +84,7 @@ func (a *UpgradeActivities) UpdateBilling(ctx context.Context, tenantID string, 
 }
 
 func (a *UpgradeActivities) RollbackQuotas(ctx context.Context, tenantID string, old billing.Quota) error {
-	activity.GetLogger(ctx).Info("Rolling back quotas (compensation)", "tenantID", tenantID)
+	logFor(ctx).Info("Rolling back quotas (compensation)", "tenantID", tenantID)
 
 	if err := a.quota.Set(ctx, tenantID, old); err != nil {
 		return err
@@ -100,7 +99,7 @@ func (a *UpgradeActivities) RollbackQuotas(ctx context.Context, tenantID string,
 }
 
 func (a *UpgradeActivities) MarkTenantUpgrading(ctx context.Context, tenantID string) error {
-	activity.GetLogger(ctx).Info("Marking tenant as upgrading", "tenantID", tenantID)
+	logFor(ctx).Info("Marking tenant as upgrading", "tenantID", tenantID)
 
 	return a.auditRepo.WriteEvent(ctx, &model.AuditEvent{
 		TenantID:  tenantID,
@@ -111,7 +110,7 @@ func (a *UpgradeActivities) MarkTenantUpgrading(ctx context.Context, tenantID st
 }
 
 func (a *UpgradeActivities) MarkTenantUpgraded(ctx context.Context, tenantID string) error {
-	activity.GetLogger(ctx).Info("Marking tenant as upgraded", "tenantID", tenantID)
+	logFor(ctx).Info("Marking tenant as upgraded", "tenantID", tenantID)
 
 	return a.auditRepo.WriteEvent(ctx, &model.AuditEvent{
 		TenantID:  tenantID,
@@ -122,7 +121,7 @@ func (a *UpgradeActivities) MarkTenantUpgraded(ctx context.Context, tenantID str
 }
 
 func (a *UpgradeActivities) MarkTenantUpgradeFailed(ctx context.Context, tenantID string) error {
-	activity.GetLogger(ctx).Info("Marking tenant upgrade as failed", "tenantID", tenantID)
+	logFor(ctx).Info("Marking tenant upgrade as failed", "tenantID", tenantID)
 
 	return a.auditRepo.WriteEvent(ctx, &model.AuditEvent{
 		TenantID:  tenantID,
