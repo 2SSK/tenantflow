@@ -1,7 +1,24 @@
+# Local environment — never commit real values
 .env
+.env.*
+!.env.example
+
+# Dependencies / build artifacts
 bin/
 dist/
 coverage.out
+node_modules/
 *.log
 AGENTS.md
 .playwright-mcp/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Keys and credentials — never commit
+*.pem
+*.key
+*.p12
+*.pfx
