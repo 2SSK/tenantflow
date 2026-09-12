@@ -870,8 +870,8 @@ Next.js app in `web/`:
 | 11.1| `docs/idempotency.md` — table of every op × repeated execution | ☑ docs/idempotency.md |
 | 11.2| Idempotency audit: fix any non-idempotent op found          | ☑ 5 fixes (provision inspect-first, migrate pre-drop `_new`, switch-traffic sentinel guard, backup pre-drop `_temp`, identity get-or-create) + 5 retry-window tests (4 postgres + 1 live Keycloak); 1 accepted+documented gap (live restore) |
 | 11.3| `docs/failure-matrix.md` — map failmatrix tests + gaps      | ☑ matrix committed (`11fda90`); gaps G1–G3 identified, automation next |
-| 11.4| CI: `.github/workflows/test.yml` (build, vet, unit tests on push/PR) | ☐ |
-| 11.5| CI: integration workflow (postgres service container, `-tags integration`) | ☐ |
+| 11.4| CI: `.github/workflows/test.yml` (build, vet, unit tests on push/PR) | ☑ gofmt gate (middleware.go excluded) → vet → build → unit |
+| 11.5| CI: integration workflow (postgres service container, `-tags integration`) | ☑ postgres + keycloak containers on the runner, realm/role setup step, then `go test -tags integration` all internal packages |
 | 11.6| Security pass: creds in git audit, `.env.example` review, dependabot | ☐ |
 | 11.7| `SECURITY.md`, `LICENSE`, `CONTRIBUTING.md`, `Makefile`     | ☐ |
 | 11.8| ADRs 0001–0007 (`docs/adr/`)                               | ☐ |

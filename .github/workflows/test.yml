@@ -1,0 +1,39 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Format check (gofmt)
+        run: |
+          # internal/auth/middleware.go is intentionally NOT gofmt-ed — its
+          # over-long lines are a deliberate alerting experiment reviewed and
+          # accepted in Phase 5, so it is excluded from the format gate.
+          # web/node_modules is vendored third-party content.
+          files=$(find . -name '*.go' -not -path './internal/auth/middleware.go' -not -path './.git/*' -not -path './web/node_modules/*')
+          if [ -n "$(gofmt -l $files)" ]; then
+            echo "gofmt needed on:"
+            gofmt -l $files
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      - name: Unit tests
+        run: go test ./...

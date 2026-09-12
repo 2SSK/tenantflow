@@ -1,0 +1,78 @@
+name: integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    env:
+      # Matches the defaults the integration suite falls back to, so no
+      # test-code changes are needed (see idatabaseURL / testPool / iKeycloakURL).
+      TENANTFLOW_DATABASE_URL: postgres://temporal:temporal@localhost:5433/tenantflow?sslmode=disable
+      TENANTFLOW_KEYCLOAK_URL: http://localhost:8081
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The cloud provider (internal/cloud/docker.go) does NOT connect to
+      # postgres over TCP for tenant databases — it execs psql INSIDE a
+      # running container it finds by name (contains "postgres") via the
+      # Docker daemon. So the service must run as a real container on the
+      # runner host (ubuntu runners ship Docker), not as a compose abstraction.
+      - name: Start postgres (provider execs psql inside it)
+        run: |
+          docker run -d --name tenantflow-postgres \
+            -p 5433:5432 \
+            -e POSTGRES_USER=temporal \
+            -e POSTGRES_PASSWORD=temporal \
+            -e POSTGRES_DB=tenantflow \
+            postgres:16
+          for i in $(seq 1 30); do
+            docker exec tenantflow-postgres pg_isready -U temporal >/dev/null && break
+            sleep 2
+          done
+          docker exec tenantflow-postgres pg_isready -U temporal
+
+      # TestProvisionTenantIdentityGetOrCreateLive skips politely when
+      # Keycloak is unreachable, but a CI that never exercises it would let
+      # the get-or-create proof rot. Start one; the test handles the rest.
+      - name: Start Keycloak (get-or-create live proof)
+        run: |
+          docker run -d --name tenantflow-keycloak \
+            -p 8081:8080 \
+            -e KEYCLOAK_ADMIN=admin \
+            -e KEYCLOAK_ADMIN_PASSWORD=admin \
+            quay.io/keycloak/keycloak:26.7.0 start-dev
+          for i in $(seq 1 60); do
+            curl -fsS http://localhost:8081/realms/master >/dev/null && break
+            sleep 3
+          done
+          curl -fsS http://localhost:8081/realms/master >/dev/null
+
+      # ProvisionTenantIdentity assigns the platform-operator role, which
+      # must exist in the tenantflow realm. Keycloak starts empty, so create
+      # realm + role exactly once via the admin API.
+      - name: Create tenantflow realm + platform-operator role
+        run: |
+          TOKEN=$(curl -fsS \
+            -d client_id=admin-cli -d username=admin -d password=admin \
+            -d grant_type=password \
+            http://localhost:8081/realms/master/protocol/openid-connect/token \
+            | jq -r .access_token)
+          curl -fsS -X POST http://localhost:8081/admin/realms \
+            -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+            -d '{"realm":"tenantflow","enabled":true}'
+          curl -fsS -X POST http://localhost:8081/admin/realms/tenantflow/roles \
+            -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+            -d '{"name":"platform-operator"}'
+
+      - name: Integration tests
+        run: go test -tags integration ./internal/...
