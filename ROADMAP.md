@@ -709,7 +709,7 @@ Next.js app in `web/`:
 - [ ] `docs/failure-matrix.md`: every failure point × expected result; automate gaps of the failmatrix
 - [ ] CI: GitHub Actions `test.yml` (fmt check→vet→build→unit) + `integration.yml` (postgres service container)
 - [ ] Security: secrets audit, `.env.example` review, `dependabot.yml`, `SECURITY.md`, `LICENSE`, `CONTRIBUTING.md`, `Makefile`
-- [ ] ADRs 0001–0007 (Temporal, DB-per-tenant, shared schema, saga, owner roles, provider abstraction, soft delete)
+- [x] ADRs 0001–0007 (Temporal, DB-per-tenant, shared schema, saga, owner roles, provider abstraction, soft delete)
 
 ### Phase 12 — Portfolio ship
 
@@ -861,7 +861,7 @@ Next.js app in `web/`:
 | 10.6| Workflow unit tests (converged / repaired / unrepairable paths) | ☑ |
 | 10.7| Provider integration tests (probe real postgres: exists/owner/revoked/missing) | ☑ |
 | 10.8| Live demo: sabotage a tenant DB, run reconcile, show repair + audit trail | ☑ |
-| 10.9| `docs/architecture.md` (or ADR) reconciliation section | ☐ |
+| 10.9| `docs/architecture.md` (or ADR) reconciliation section | ☑ covered by docs/failure-matrix.md §3.7 (contract) + §3.7 tests + reconcile.go |
 
 ### Phase 11 — Hardening & docs (no new features)
 
@@ -874,7 +874,7 @@ Next.js app in `web/`:
 | 11.5| CI: integration workflow (postgres service container, `-tags integration`) | ☑ postgres + keycloak containers on the runner, realm/role setup step, then `go test -tags integration` all internal packages |
 | 11.6| Security pass: creds in git audit, `.env.example` review, dependabot | ☑ audit clean over all 63 commits; .gitignore hardened; dependabot.yml + SECURITY.md |
 | 11.7| `SECURITY.md`, `LICENSE`, `CONTRIBUTING.md`, `Makefile`     | ☑ LICENSE existed (MIT); CONTRIBUTING.md + Makefile (check/fmt/vet/build/test/integration/dev-*) + deploy/keycloak/setup.sh |
-| 11.8| ADRs 0001–0007 (`docs/adr/`)                               | ☐ |
+| 11.8| ADRs 0001–0007 (`docs/adr/`)                               | ☑ 0001 Temporal, 0002 DB-per-tenant, 0003 shared schema, 0004 saga, 0005 owner roles, 0006 provider, 0007 soft delete |
 
 ### Phase 12 — Portfolio ship
 
