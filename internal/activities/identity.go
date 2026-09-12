@@ -32,11 +32,27 @@ func (a *IdentityActivities) ProvisionTenantIdentity(ctx context.Context, tenant
 	firstName := tenantID
 	lastName := "Admin"
 
-	userID, err := a.provider.CreateUser(ctx, username, email, password, firstName, lastName)
+	// Get-or-create: Keycloak's POST /users returns 409 when the username
+	// already exists, so a retried activity (worker died after the create but
+	// before reporting success) would previously fail and send the whole
+	// provision saga into the DLQ until a human deleted the user by hand.
+	// Probe first; reuse the existing user when present.
+	userID, found, err := a.provider.GetUserByUsername(ctx, username)
 	if err != nil {
-		return "", fmt.Errorf("create identity for tenant %s: %w", tenantID, err)
+		return "", fmt.Errorf("probe identity for tenant %s: %w", tenantID, err)
+	}
+	if !found {
+		userID, err = a.provider.CreateUser(ctx, username, email, password, firstName, lastName)
+		if err != nil {
+			return "", fmt.Errorf("create identity for tenant %s: %w", tenantID, err)
+		}
+	} else {
+		logger.Info("tenant identity already exists; reusing", "tenantID", tenantID, "userID", userID)
 	}
 
+	// Role mapping is a set operation in Keycloak, so re-assigning converges:
+	// a pre-existing user (or a retry of this activity) gets the role without
+	// erroring.
 	if err := a.provider.AssignRole(ctx, userID, "platform-operator"); err != nil {
 		return "", fmt.Errorf("assign role for tenant %s: %w", tenantID, err)
 	}

@@ -868,7 +868,7 @@ Next.js app in `web/`:
 | #   | Task                                                       | Status |
 | --- | ---------------------------------------------------------- | ------ |
 | 11.1| `docs/idempotency.md` — table of every op × repeated execution | ☑ docs/idempotency.md |
-| 11.2| Idempotency audit: fix any non-idempotent op found          | ☑ 4 fixes (provision inspect-first, migrate pre-drop `_new`, switch-traffic sentinel guard, backup pre-drop `_temp`) + 4 retry-window integration tests; 2 accepted+documented gaps (Keycloak identity, live restore) |
+| 11.2| Idempotency audit: fix any non-idempotent op found          | ☑ 5 fixes (provision inspect-first, migrate pre-drop `_new`, switch-traffic sentinel guard, backup pre-drop `_temp`, identity get-or-create) + 5 retry-window tests (4 postgres + 1 live Keycloak); 1 accepted+documented gap (live restore) |
 | 11.3| `docs/failure-matrix.md` — map failmatrix tests + gaps      | ☐ |
 | 11.4| CI: `.github/workflows/test.yml` (build, vet, unit tests on push/PR) | ☐ |
 | 11.5| CI: integration workflow (postgres service container, `-tags integration`) | ☐ |

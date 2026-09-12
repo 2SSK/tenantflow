@@ -110,6 +110,36 @@ func (k *KeycloakProvider) doAdminRequest(ctx context.Context, method, path stri
 	return k.httpClient.Do(req)
 }
 
+// GetUserByUsername resolves a user's ID from their exact username. Keycloak
+// enforces unique usernames, so at most one match can exist. This is the
+// "check" half of the get-or-create pattern: provisioning first probes here,
+// and only POSTs /users when the user is truly absent — a retried activity
+// then converges instead of dying with HTTP 409 on a duplicate create.
+func (k *KeycloakProvider) GetUserByUsername(ctx context.Context, username string) (string, bool, error) {
+	resp, err := k.doAdminRequest(ctx, "GET",
+		"/users?username="+url.QueryEscape(username)+"&exact=true", nil)
+	if err != nil {
+		return "", false, fmt.Errorf("get user by username: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", false, fmt.Errorf("get user by username %d:%s", resp.StatusCode, body)
+	}
+
+	var users []struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&users); err != nil {
+		return "", false, fmt.Errorf("decode users: %w", err)
+	}
+	if len(users) == 0 {
+		return "", false, nil
+	}
+	return users[0].ID, true, nil
+}
+
 func (k *KeycloakProvider) CreateUser(ctx context.Context, username, email, password, firstName, lastName string) (string, error) {
 	payload := map[string]interface{}{
 		"username":      username,

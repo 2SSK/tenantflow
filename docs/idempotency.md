@@ -89,8 +89,8 @@ Meaning of the columns:
 | ProvisionTenant (shared) | activity | ✅ | No infrastructure created; only an idempotent audit write. |
 | MarkTenantActive / MarkTenantFailed / MarkTenantMigrated / … | activity | ✅ | Idempotent `UPDATE` / audit `WriteEvent`. |
 | DropTenantDatabase (compensation) | activity | ✅ | `DROP DATABASE IF EXISTS`. |
-| ProvisionTenantIdentity | activity | ⚠️ **Known gap** (§4.1) | Keycloak `POST /users` — a retried activity re-creating the user gets HTTP 409. Manual remediation: delete the user in Keycloak, or let reconcile skip (identity is not yet reconciled). |
-| AssignRole (identity) | activity | ⚠️ Known gap (§4.1) | Keycloak role-mapping POST is not idempotent. Same remediation. |
+| ProvisionTenantIdentity | activity | ✅ | **Fixed in this audit** (§3.5): get-or-create — probe `GetUserByUsername` first, `POST /users` only when absent. A retried activity reuses the existing user instead of 409ing. Proven by `TestProvisionTenantIdentityGetOrCreateLive` against real Keycloak. |
+| AssignRole (identity) | activity | ✅ | Keycloak role-mappings are a set operation; re-assigning converges. |
 | MigrateData | activity | ✅ | **Fixed in this audit** (§3.2): pre-drops the fixed-name `_new` DB before building, so a retry after a mid-way crash resumes cleanly. Snapshot artifact is new per run. |
 | SwitchTraffic | activity | ✅ | **Fixed in this audit** (§3.3): `_new` existence is the forward-progress sentinel. If `_new` is gone, the switch already happened → no-op success. Previously a retry re-dropped the live DB and destroyed a *completed* promotion (then self-healed from backup — data recovered, migration lost). |
 | DropTenantAuxDatabase (compensation) | activity | ✅ | `DROP … IF EXISTS` + idempotent audit write. |
@@ -110,7 +110,7 @@ Meaning of the columns:
 
 ## 4. The audit findings
 
-The table above contains four fixes and two accepted gaps.
+The table above contains five fixes and one accepted gap.
 
 ### 4.1 Fixed in this audit
 
@@ -140,19 +140,22 @@ blocked the retry. Now: pre-drop `_temp` before restoring into it.
 separate integration test because BackupTenantData needs a real repo — the
 pre-drop line is the identical pattern.)
 
+**ProvisionTenantIdentity** (`internal/activities/identity.go`):
+Keycloak's `POST /users` returns 409 when the username already exists, so a
+retried activity failed and dragged the provision saga into the DLQ until a
+human deleted the user by hand. Now: probe `GetUserByUsername` first and
+create only when absent; role assignment re-runs and converges because
+Keycloak role-mappings are a set operation. `DeleteUser` already treated 404
+as success, so deletes were safe.
+Proofs: `TestProvisionTenantIdentityCreatesWhenAbsent`,
+`TestProvisionTenantIdentityReusesExisting` (fast unit tests with a recording
+fake), and `TestProvisionTenantIdentityGetOrCreateLive` (real Keycloak,
+double-call converges to the same user ID).
+
 ### 4.2 Accepted gaps (documented, not silent)
 
-**Keycloak identity provisioning.** `CreateUser` / `AssignRole` are not
-idempotent: a retry after a lost result gets a 409 from Keycloak and the
-workflow lands in the DLQ. Remediation today: delete the user in Keycloak and
-re-start, or leave the tenant to reconciliation (identity is not yet a
-reconciled resource). The proper fix is get-or-create (probe
-`GET /users?username=…` before `POST`), tracked for a future phase.
-Why accepted: the window is narrow (result lost *after* user creation), the
-blast radius is manual and documented, and the fix is isolated to the identity
-provider.
-
-**Restore into the live database.** `RestoreData` restores a plain dump into
+The Keycloak gap described in earlier drafts is fixed (§3.5). The remaining
+accepted gap: `RestoreData` restores a plain dump into
 the live DB; a retry after a partial restore fails with "relation already
 exists". This is mitigated structurally: every restore is preceded by
 `PreRestoreSnapshot`, and the documented remediation for a broken restore is
