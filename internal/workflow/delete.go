@@ -31,6 +31,13 @@ type DeleteInput struct {
 	// the state transition and the grace period: it picks up where the failed
 	// run stopped. Started by the DLQ replay endpoint, never by DELETE.
 	Resume bool
+	// IsolationMode decides whether the pre-delete backup runs. Shared-schema
+	// tenants have no tenant_<id> database, so there is nothing to snapshot;
+	// attempting one makes the delete saga fail permanently (the load test
+	// found 100/100 shared deletes stuck in the DLQ this way). An empty value
+	// is treated as dedicated — the default mode and the shape older inputs
+	// carry.
+	IsolationMode model.IsolationMode
 }
 
 // teardownBackupVersion is the workflow-version marker for the v1 teardown
@@ -150,11 +157,21 @@ func DeleteTenantWorkflow(ctx workflow.Context, in DeleteInput) (err error) {
 	// original semantics: their history lacks the marker, so on replay this
 	// returns DefaultVersion and the branch is skipped.
 	if workflow.GetVersion(actCtx, "tf-delete-preteardown-backup", workflow.DefaultVersion, teardownBackupVersion) >= teardownBackupVersion {
-		var preDeleteBackup *model.Backup
-		if err = workflow.ExecuteActivity(actCtx, activities.BackupTenantDataActivityName, in.TenantID).Get(actCtx, &preDeleteBackup); err != nil {
-			return err
+		// Shared-schema tenants share the platform database and have no
+		// tenant_<id> database to snapshot: BackupTenantData would pg_dump a
+		// nonexistent database, exhaust its retries, and strand the deletion
+		// in the DLQ forever (observed live in the 12.2 load run). Skipping
+		// the backup for them is the only correct behavior — there is no
+		// per-tenant artifact to retain, and teardown continues normally.
+		if in.IsolationMode == model.IsolationModeShared {
+			logger.Info("skipping pre-delete backup: shared tenant has no dedicated database", "TenantID", in.TenantID)
+		} else {
+			var preDeleteBackup *model.Backup
+			if err = workflow.ExecuteActivity(actCtx, activities.BackupTenantDataActivityName, in.TenantID).Get(actCtx, &preDeleteBackup); err != nil {
+				return err
+			}
+			logger.Info("teardown v1: pre-delete backup captured", "TenantID", in.TenantID, "BackupID", preDeleteBackup.ID, "Filename", preDeleteBackup.Filename)
 		}
-		logger.Info("teardown v1: pre-delete backup captured", "TenantID", in.TenantID, "BackupID", preDeleteBackup.ID, "Filename", preDeleteBackup.Filename)
 	}
 
 	if err = workflow.ExecuteActivity(actCtx, activities.DeprovisionTenantActivityName, in.TenantID).Get(actCtx, nil); err != nil {

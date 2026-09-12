@@ -45,6 +45,45 @@ func TestDeleteWorkflow_TimerExpirySucceeds(t *testing.T) {
 	env.AssertNotCalled(t, activities.MarkTenantDeleteFailedActivityName, mock.Anything, "acme-del")
 }
 
+// A shared-schema tenant has no dedicated tenant_<id> database. The v1
+// pre-delete backup snapshots that database, so it MUST be skipped for shared
+// tenants — otherwise BackupTenantData pg_dumps a database that does not exist,
+// exhausts its retries, and strands the deletion in the DLQ forever (observed
+// live in the 12.2 load run: 100/100 shared deletes stuck). No mock is
+// registered for BackupTenantData, so if the workflow calls it the run fails.
+func TestDeleteWorkflow_SharedTenantSkipsPreDeleteBackup(t *testing.T) {
+	env := (&testsuite.WorkflowTestSuite{}).NewTestWorkflowEnvironment()
+
+	env.RegisterActivity(activities.NewDeprovisionActivities(nil, nil))
+	env.RegisterActivity(activities.NewCancelDeleteActivities(nil, nil))
+	env.RegisterActivity(activities.NewBackupActivities(nil, nil, nil))
+
+	env.OnActivity(activities.MarkTenantDeletingActivityName, mock.Anything, "acme-shared").Return(nil)
+	env.OnActivity(activities.DeprovisionTenantActivityName, mock.Anything, "acme-shared").Return(nil)
+	env.OnActivity(activities.MarkTenantDeletedActivityName, mock.Anything, "acme-shared").Return(nil)
+
+	env.ExecuteWorkflow(DeleteTenantWorkflow, DeleteInput{
+		TenantID:      "acme-shared",
+		GracePeriod:   30 * 24 * time.Hour,
+		IsolationMode: model.IsolationModeShared,
+	})
+
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("workflow did not complete")
+	}
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatalf("unexpected workflow error: %v", err)
+	}
+
+	// Teardown ran to completion...
+	env.AssertCalled(t, activities.DeprovisionTenantActivityName, mock.Anything, "acme-shared")
+	env.AssertCalled(t, activities.MarkTenantDeletedActivityName, mock.Anything, "acme-shared")
+	// ...but the backup step never ran.
+	env.AssertNotCalled(t, activities.BackupTenantDataActivityName, mock.Anything, "acme-shared")
+	// No failure audit on a clean run.
+	env.AssertNotCalled(t, activities.MarkTenantDeleteFailedActivityName, mock.Anything, "acme-shared")
+}
+
 // The operator sends the cancel-delete signal DURING the grace period (before
 // the timer expires): the saga must take the restore path (status back to
 // active) and must NOT tear anything down.

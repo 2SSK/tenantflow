@@ -453,8 +453,9 @@ func (h *TenantHandler) DeleteTenant(w http.ResponseWriter, r *http.Request) {
 		WorkflowIDReusePolicy:                    enums.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
 		WorkflowExecutionErrorWhenAlreadyStarted: true,
 	}, tfworkflow.DeleteTenantWorkflow, tfworkflow.DeleteInput{
-		TenantID:    tenantID,
-		GracePeriod: deleteGracePeriod,
+		TenantID:      tenantID,
+		GracePeriod:   deleteGracePeriod,
+		IsolationMode: tenant.IsolationMode,
 	})
 	if err != nil {
 		var already *serviceerror.WorkflowExecutionAlreadyStarted
@@ -975,9 +976,10 @@ func (h *TenantHandler) resumeDelete(w http.ResponseWriter, r *http.Request, ten
 		WorkflowIDReusePolicy:                    enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
 		WorkflowExecutionErrorWhenAlreadyStarted: true,
 	}, tfworkflow.DeleteTenantWorkflow, tfworkflow.DeleteInput{
-		TenantID:    tenantID,
-		GracePeriod: deleteGracePeriod,
-		Resume:      true,
+		TenantID:      tenantID,
+		GracePeriod:   deleteGracePeriod,
+		Resume:        true,
+		IsolationMode: tenant.IsolationMode,
 	})
 	if err != nil {
 		h.log.Error("resume delete workflow", "tenantID", tenantID, "error", err)

@@ -95,6 +95,7 @@ Meaning of the columns:
 | SwitchTraffic | activity | ✅ | **Fixed in this audit** (§3.3): `_new` existence is the forward-progress sentinel. If `_new` is gone, the switch already happened → no-op success. Previously a retry re-dropped the live DB and destroyed a *completed* promotion (then self-healed from backup — data recovered, migration lost). |
 | DropTenantAuxDatabase (compensation) | activity | ✅ | `DROP … IF EXISTS` + idempotent audit write. |
 | BackupTenantData | activity | ✅ | **Fixed in this audit** (§3.4): pre-drops the fixed-name `_temp` verification DB. A lost-result retry may create a second, equally valid backup row — benign (immutable artifacts). |
+| DeleteTenantWorkflow (shared tenant) | workflow | ✅ | Skips `BackupTenantData` entirely: a shared tenant has no `tenant_<id>` database to snapshot, and dumping a nonexistent DB strands the deletion in the DLQ (found by the 12.2 load run — 100/100 shared deletes stuck). Covered by `TestDeleteWorkflow_SharedTenantSkipsPreDeleteBackup`. |
 | RestoreData | activity | ⚠️ **Known gap** (§4.2) | Plain restore into the live DB. Retry after a partial restore hits "relation already exists". Mitigation: pre-restore snapshot exists for rollback; remediation = rollback, not re-run. |
 | PreRestoreSnapshot | activity | ✅ | New artifact per run. |
 | RestoreRollback | activity | ⚠️ Same as RestoreData | Same mitigation. |

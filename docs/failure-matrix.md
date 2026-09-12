@@ -168,7 +168,7 @@ delete     (none)  reviving a half-torn-down tenant would be a lie — failure
 | # | Activity | On failure | Notes |
 |---|---|---|---|
 | 0 | `MarkTenantDeleting` | nothing | grace-period timer + cancel window are workflow tests (`DeleteWorkflow_TimerExpirySucceeds`, `CancelSignalDuringGracePeriod`, `ResumeSkipsTransitionAndGrace`, `CancelRestoreFails`) |
-| 1 | `BackupTenantData` | nothing | version-gated pre-delete backup |
+| 1 | `BackupTenantData` | nothing | version-gated pre-delete backup; skipped for shared-schema tenants — they own no dedicated DB, so there is nothing to snapshot (found in the 12.2 load run: shared deletes stranded in the DLQ) |
 | 2 | `DeprovisionTenant` | nothing (deliberate — see §3) | teardown has no compensation |
 | 3 | `MarkTenantDeleted` | — | — |
 

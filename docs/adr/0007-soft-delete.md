@@ -43,6 +43,9 @@ Positive:
 - Accidental deletes are reversible during the grace window.
 - Deletes are *durable*: no operator babysitting after the window expires.
 - The backup-before-deprovision rule means restore always has an artifact.
+- Shared-schema tenants have no dedicated database, so the delete saga skips
+  the backup step for them (nothing to snapshot; dumping a nonexistent DB
+  would strand their deletion in the DLQ — found in the 12.2 load run).
 
 Negative:
 

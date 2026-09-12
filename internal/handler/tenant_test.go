@@ -420,6 +420,17 @@ func TestDeleteTenant(t *testing.T) {
 			started:    true,
 		},
 		{
+			name: "shared tenant delete passes isolation mode to the saga",
+			store: &stubTenantStore{tenant: &model.Tenant{
+				TenantID:      "acme",
+				Status:        model.TenantStatusActive,
+				IsolationMode: model.IsolationModeShared,
+			}},
+			wantStatus: http.StatusAccepted,
+			wantBody:   `"workflowID":"delete-acme"`,
+			started:    true,
+		},
+		{
 			name:       "not found",
 			store:      &stubTenantStore{err: repository.ErrNotFound},
 			wantStatus: http.StatusNotFound,
@@ -490,6 +501,9 @@ func TestDeleteTenant(t *testing.T) {
 				in, ok := stub.startedArgs[0].(tfworkflow.DeleteInput)
 				if !ok || in.TenantID != "acme" {
 					t.Errorf("unexpected workflow input: %#v", stub.startedArgs)
+				}
+				if in.IsolationMode != tt.store.tenant.IsolationMode {
+					t.Errorf("DeleteInput.IsolationMode = %q, want %q", in.IsolationMode, tt.store.tenant.IsolationMode)
 				}
 			}
 		})
@@ -913,6 +927,7 @@ func TestRetryTenant(t *testing.T) {
 	failedTenant := &model.Tenant{TenantID: "acme", Status: model.TenantStatusFailed, IsolationMode: model.IsolationModeDedicated}
 	activeTenant := &model.Tenant{TenantID: "acme", Status: model.TenantStatusActive}
 	deletingTenant := &model.Tenant{TenantID: "acme", Status: model.TenantStatusDeleting, IsolationMode: model.IsolationModeDedicated}
+	sharedDeletingTenant := &model.Tenant{TenantID: "acme", Status: model.TenantStatusDeleting, IsolationMode: model.IsolationModeShared}
 	failedDeleteRun := model.WorkflowInstance{
 		TenantID:     "acme",
 		WorkflowType: "DeleteTenantWorkflow",
@@ -947,6 +962,17 @@ func TestRetryTenant(t *testing.T) {
 		{
 			name:       "resumes delete for a stuck deleting tenant",
 			tenant:     deletingTenant,
+			failedRun:  failedDeleteRun,
+			wantStatus: http.StatusAccepted,
+			wantBody:   `"workflowID":"delete-acme"`,
+			started:    true,
+			wantID:     "delete-acme",
+			wantResume: true,
+			wantAudit:  model.AuditEventTenantDeleteResumed,
+		},
+		{
+			name:       "resumes delete for a stuck shared tenant (isolation mode passed)",
+			tenant:     sharedDeletingTenant,
 			failedRun:  failedDeleteRun,
 			wantStatus: http.StatusAccepted,
 			wantBody:   `"workflowID":"delete-acme"`,
@@ -1028,6 +1054,9 @@ func TestRetryTenant(t *testing.T) {
 					}
 					if !in.Resume {
 						t.Error("DeleteInput.Resume = false, want true")
+					}
+					if in.IsolationMode != tt.tenant.IsolationMode {
+						t.Errorf("DeleteInput.IsolationMode = %q, want %q", in.IsolationMode, tt.tenant.IsolationMode)
 					}
 				}
 			}
