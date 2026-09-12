@@ -872,8 +872,8 @@ Next.js app in `web/`:
 | 11.3| `docs/failure-matrix.md` — map failmatrix tests + gaps      | ☑ matrix committed (`11fda90`); gaps G1–G3 identified, automation next |
 | 11.4| CI: `.github/workflows/test.yml` (build, vet, unit tests on push/PR) | ☑ gofmt gate (middleware.go excluded) → vet → build → unit |
 | 11.5| CI: integration workflow (postgres service container, `-tags integration`) | ☑ postgres + keycloak containers on the runner, realm/role setup step, then `go test -tags integration` all internal packages |
-| 11.6| Security pass: creds in git audit, `.env.example` review, dependabot | ☐ |
-| 11.7| `SECURITY.md`, `LICENSE`, `CONTRIBUTING.md`, `Makefile`     | ☐ |
+| 11.6| Security pass: creds in git audit, `.env.example` review, dependabot | ☑ audit clean over all 63 commits; .gitignore hardened; dependabot.yml + SECURITY.md |
+| 11.7| `SECURITY.md`, `LICENSE`, `CONTRIBUTING.md`, `Makefile`     | ☑ LICENSE existed (MIT); CONTRIBUTING.md + Makefile (check/fmt/vet/build/test/integration/dev-*) + deploy/keycloak/setup.sh |
 | 11.8| ADRs 0001–0007 (`docs/adr/`)                               | ☐ |
 
 ### Phase 12 — Portfolio ship
