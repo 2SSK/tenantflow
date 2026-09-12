@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
+	"github.com/2SSK/tenantflow/internal/cloud"
 	"github.com/2SSK/tenantflow/internal/model"
 	"github.com/2SSK/tenantflow/internal/repository"
 	"go.temporal.io/sdk/temporal"
@@ -20,10 +20,11 @@ const (
 type DeprovisionActivities struct {
 	repo      repository.TenantRepository
 	auditRepo repository.AuditRepository
+	provider  cloud.CloudProvider
 }
 
-func NewDeprovisionActivities(repo repository.TenantRepository, auditRepo repository.AuditRepository) *DeprovisionActivities {
-	return &DeprovisionActivities{repo: repo, auditRepo: auditRepo}
+func NewDeprovisionActivities(repo repository.TenantRepository, auditRepo repository.AuditRepository, provider cloud.CloudProvider) *DeprovisionActivities {
+	return &DeprovisionActivities{repo: repo, auditRepo: auditRepo, provider: provider}
 }
 
 func (a *DeprovisionActivities) MarkTenantDeleting(ctx context.Context, tenantID string) error {
@@ -52,13 +53,27 @@ func (a *DeprovisionActivities) MarkTenantDeleting(ctx context.Context, tenantID
 func (a *DeprovisionActivities) DeprovisionTenant(ctx context.Context, tenantID string) error {
 	logFor(ctx).Info("Deprovision tenant", "tenantID", tenantID)
 
-	time.Sleep(2 * time.Second)
+	// Real teardown, not a simulation: drop the tenant's dedicated database
+	// and owner role. Both provider operations are idempotent (IF EXISTS), so
+	// shared-schema tenants — which never got a database — no-op cleanly, and
+	// a resumed DLQ replay of an already-partially-torn tenant converges.
+	// The load test caught the old stub: it slept and wrote an audit event but
+	// never touched the infrastructure, so 100 deleted dedicated tenants left
+	// their databases behind forever.
+	if err := a.provider.DropDatabase(ctx, tenantID); err != nil {
+		return fmt.Errorf("drop database for tenant %s: %w", tenantID, err)
+	}
+	if err := a.provider.DropTenantRole(ctx, tenantID); err != nil {
+		return fmt.Errorf("drop role for tenant %s: %w", tenantID, err)
+	}
 
+	// Drops are durable side effects recorded in history; the identity (the
+	// Keycloak user) lifecycle is handled by the delete saga's identity step.
 	return a.auditRepo.WriteEvent(ctx, &model.AuditEvent{
 		TenantID:  tenantID,
 		EventType: model.AuditEventTenantDeprovisioned,
 		Actor:     "workflow",
-		Payload:   map[string]any{"infra": "simulated teardown"},
+		Payload:   map[string]any{"teardown": "database and owner role dropped"},
 	})
 }
 

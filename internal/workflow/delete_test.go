@@ -17,14 +17,16 @@ import (
 func TestDeleteWorkflow_TimerExpirySucceeds(t *testing.T) {
 	env := (&testsuite.WorkflowTestSuite{}).NewTestWorkflowEnvironment()
 
-	env.RegisterActivity(activities.NewDeprovisionActivities(nil, nil))
+	env.RegisterActivity(activities.NewDeprovisionActivities(nil, nil, nil))
 	env.RegisterActivity(activities.NewCancelDeleteActivities(nil, nil))
 	env.RegisterActivity(activities.NewBackupActivities(nil, nil, nil))
+	env.RegisterActivity(activities.NewIdentityActivities(nil))
 
 	env.OnActivity(activities.MarkTenantDeletingActivityName, mock.Anything, "acme-del").Return(nil)
 	// v1 teardown captures a verified pre-delete backup before teardown.
 	env.OnActivity(activities.BackupTenantDataActivityName, mock.Anything, "acme-del").Return(&model.Backup{ID: 7, Filename: "pre-delete.tar.gz"}, nil)
 	env.OnActivity(activities.DeprovisionTenantActivityName, mock.Anything, "acme-del").Return(nil)
+	env.OnActivity(activities.DeleteTenantIdentityByTenantActivityName, mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity(activities.MarkTenantDeletedActivityName, mock.Anything, "acme-del").Return(nil)
 
 	env.ExecuteWorkflow(DeleteTenantWorkflow, DeleteInput{TenantID: "acme-del", GracePeriod: 30 * 24 * time.Hour})
@@ -54,12 +56,14 @@ func TestDeleteWorkflow_TimerExpirySucceeds(t *testing.T) {
 func TestDeleteWorkflow_SharedTenantSkipsPreDeleteBackup(t *testing.T) {
 	env := (&testsuite.WorkflowTestSuite{}).NewTestWorkflowEnvironment()
 
-	env.RegisterActivity(activities.NewDeprovisionActivities(nil, nil))
+	env.RegisterActivity(activities.NewDeprovisionActivities(nil, nil, nil))
 	env.RegisterActivity(activities.NewCancelDeleteActivities(nil, nil))
 	env.RegisterActivity(activities.NewBackupActivities(nil, nil, nil))
+	env.RegisterActivity(activities.NewIdentityActivities(nil))
 
 	env.OnActivity(activities.MarkTenantDeletingActivityName, mock.Anything, "acme-shared").Return(nil)
 	env.OnActivity(activities.DeprovisionTenantActivityName, mock.Anything, "acme-shared").Return(nil)
+	env.OnActivity(activities.DeleteTenantIdentityByTenantActivityName, mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity(activities.MarkTenantDeletedActivityName, mock.Anything, "acme-shared").Return(nil)
 
 	env.ExecuteWorkflow(DeleteTenantWorkflow, DeleteInput{
@@ -90,7 +94,7 @@ func TestDeleteWorkflow_SharedTenantSkipsPreDeleteBackup(t *testing.T) {
 func TestDeleteWorkflow_CancelSignalDuringGracePeriod(t *testing.T) {
 	env := (&testsuite.WorkflowTestSuite{}).NewTestWorkflowEnvironment()
 
-	env.RegisterActivity(activities.NewDeprovisionActivities(nil, nil))
+	env.RegisterActivity(activities.NewDeprovisionActivities(nil, nil, nil))
 	env.RegisterActivity(activities.NewCancelDeleteActivities(nil, nil))
 
 	env.OnActivity(activities.MarkTenantDeletingActivityName, mock.Anything, "acme-del").Return(nil)
@@ -127,9 +131,10 @@ func TestDeleteWorkflow_CancelSignalDuringGracePeriod(t *testing.T) {
 func TestDeleteWorkflow_TeardownFailsAfterTimerExpiry(t *testing.T) {
 	env := (&testsuite.WorkflowTestSuite{}).NewTestWorkflowEnvironment()
 
-	env.RegisterActivity(activities.NewDeprovisionActivities(nil, nil))
+	env.RegisterActivity(activities.NewDeprovisionActivities(nil, nil, nil))
 	env.RegisterActivity(activities.NewCancelDeleteActivities(nil, nil))
 	env.RegisterActivity(activities.NewBackupActivities(nil, nil, nil))
+	env.RegisterActivity(activities.NewIdentityActivities(nil))
 
 	env.OnActivity(activities.MarkTenantDeletingActivityName, mock.Anything, "acme-del").Return(nil)
 	// v1 teardown captures a verified pre-delete backup before teardown.
@@ -160,15 +165,17 @@ func TestDeleteWorkflow_TeardownFailsAfterTimerExpiry(t *testing.T) {
 func TestDeleteWorkflow_ResumeSkipsTransitionAndGrace(t *testing.T) {
 	env := (&testsuite.WorkflowTestSuite{}).NewTestWorkflowEnvironment()
 
-	env.RegisterActivity(activities.NewDeprovisionActivities(nil, nil))
+	env.RegisterActivity(activities.NewDeprovisionActivities(nil, nil, nil))
 	env.RegisterActivity(activities.NewCancelDeleteActivities(nil, nil))
 	env.RegisterActivity(activities.NewBackupActivities(nil, nil, nil))
+	env.RegisterActivity(activities.NewIdentityActivities(nil))
 
 	// Note: MarkTenantDeleting is deliberately NOT stubbed. If the workflow
 	// tried to run it on the resume path, the mock would panic with "unexpected
 	// call" and the test would fail — the strongest assertion there is.
 	env.OnActivity(activities.BackupTenantDataActivityName, mock.Anything, "acme-del").Return(&model.Backup{ID: 9, Filename: "pre-delete.tar.gz"}, nil)
 	env.OnActivity(activities.DeprovisionTenantActivityName, mock.Anything, "acme-del").Return(nil)
+	env.OnActivity(activities.DeleteTenantIdentityByTenantActivityName, mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity(activities.MarkTenantDeletedActivityName, mock.Anything, "acme-del").Return(nil)
 
 	env.ExecuteWorkflow(DeleteTenantWorkflow, DeleteInput{TenantID: "acme-del", GracePeriod: 30 * 24 * time.Hour, Resume: true})
@@ -196,7 +203,7 @@ func TestDeleteWorkflow_ResumeSkipsTransitionAndGrace(t *testing.T) {
 func TestDeleteWorkflow_CancelRestoreFails(t *testing.T) {
 	env := (&testsuite.WorkflowTestSuite{}).NewTestWorkflowEnvironment()
 
-	env.RegisterActivity(activities.NewDeprovisionActivities(nil, nil))
+	env.RegisterActivity(activities.NewDeprovisionActivities(nil, nil, nil))
 	env.RegisterActivity(activities.NewCancelDeleteActivities(nil, nil))
 
 	env.OnActivity(activities.MarkTenantDeletingActivityName, mock.Anything, "acme-del").Return(nil)

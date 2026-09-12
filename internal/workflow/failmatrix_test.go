@@ -219,10 +219,11 @@ var matrices = []workflowMatrix{
 		wf:    DeleteTenantWorkflow,
 		input: DeleteInput{TenantID: matrixTenant, GracePeriod: 30 * 24 * time.Hour},
 		activities: []string{
-			activities.MarkTenantDeletingActivityName, // 0
-			activities.BackupTenantDataActivityName,   // 1 — version-gated pre-delete backup
-			activities.DeprovisionTenantActivityName,  // 2
-			activities.MarkTenantDeletedActivityName,  // 3 — success terminal
+			activities.MarkTenantDeletingActivityName,           // 0
+			activities.BackupTenantDataActivityName,             // 1 — version-gated pre-delete backup
+			activities.DeprovisionTenantActivityName,            // 2
+			activities.DeleteTenantIdentityByTenantActivityName, // 3
+			activities.MarkTenantDeletedActivityName,            // 4 — success terminal
 		},
 		// Teardown deliberately has no compensation: reviving a half-torn-down
 		// tenant would be a lie, so failure only audits TENANT_DELETE_FAILED.
@@ -230,14 +231,16 @@ var matrices = []workflowMatrix{
 		terminal:    activities.MarkTenantDeleteFailedActivityName,
 		successArgs: []any{matrixTenant},
 		register: func(env *testsuite.TestWorkflowEnvironment) {
-			env.RegisterActivity(activities.NewDeprovisionActivities(nil, nil))
+			env.RegisterActivity(activities.NewDeprovisionActivities(nil, nil, nil))
 			env.RegisterActivity(activities.NewCancelDeleteActivities(nil, nil))
 			env.RegisterActivity(activities.NewBackupActivities(nil, nil, nil))
+			env.RegisterActivity(activities.NewIdentityActivities(nil))
 		},
 		mock: func(env *testsuite.TestWorkflowEnvironment, failName string) {
 			mockActivity(env, failName, activities.MarkTenantDeletingActivityName, []any{nil}, nil, matrixTenant)
 			mockActivity(env, failName, activities.BackupTenantDataActivityName, []any{backupRecord, nil}, []any{nil}, matrixTenant)
 			mockActivity(env, failName, activities.DeprovisionTenantActivityName, []any{nil}, nil, matrixTenant)
+			mockActivity(env, failName, activities.DeleteTenantIdentityByTenantActivityName, []any{nil}, nil, matrixTenant)
 			mockActivity(env, failName, activities.MarkTenantDeletedActivityName, []any{nil}, nil, matrixTenant)
 			mockActivity(env, failName, activities.MarkTenantDeleteFailedActivityName, []any{nil}, nil, matrixTenant)
 		},

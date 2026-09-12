@@ -8,9 +8,19 @@ import (
 )
 
 const (
-	ProvisionTenantIdentityActivityName = "ProvisionTenantIdentity"
-	DeleteTenantIdentityActivityName    = "DeleteTenantIdentity"
+	ProvisionTenantIdentityActivityName      = "ProvisionTenantIdentity"
+	DeleteTenantIdentityActivityName         = "DeleteTenantIdentity"
+	DeleteTenantIdentityByTenantActivityName = "DeleteTenantIdentityByTenant"
 )
+
+// tenantIdentityUsername is the single source of truth for the username a
+// tenant's identity owns. Provision creates it; the delete saga derives it to
+// tear the identity down (a separate workflow run cannot read provision's
+// userID variable). Keep both sides on this rule or provisioning and
+// teardown silently stop reaching the same user.
+func tenantIdentityUsername(tenantID string) string {
+	return tenantID + "-admin"
+}
 
 type IdentityActivities struct {
 	provider identity.IdentityProvider
@@ -26,7 +36,7 @@ func (a *IdentityActivities) ProvisionTenantIdentity(ctx context.Context, tenant
 	logger := logFor(ctx)
 	logger.Info("Provisioning tenant identity", "tenantID", tenantID)
 
-	username := tenantID + "-admin"
+	username := tenantIdentityUsername(tenantID)
 	email := username + "@tenantflow.local"
 	password := tenantID + "-pass"
 	firstName := tenantID
@@ -70,4 +80,24 @@ func (a *IdentityActivities) DeleteTenantIdentity(ctx context.Context, userID st
 	}
 
 	return nil
+}
+
+// DeleteTenantIdentityByTenant tears down a tenant's identity when the delete
+// saga only knows the tenantID (a separate workflow run; provision's userID
+// variable is not visible here). Derives the username, probes, no-ops when
+// the user is already gone. Used by DeleteTenantWorkflow.
+func (a *IdentityActivities) DeleteTenantIdentityByTenant(ctx context.Context, tenantID string) error {
+	logger := logFor(ctx)
+	username := tenantIdentityUsername(tenantID)
+
+	userID, found, err := a.provider.GetUserByUsername(ctx, username)
+	if err != nil {
+		return fmt.Errorf("probe identity for tenant %s: %w", tenantID, err)
+	}
+	if !found {
+		logger.Info("no tenant identity to delete; skipping", "tenantID", tenantID)
+		return nil
+	}
+
+	return a.DeleteTenantIdentity(ctx, userID)
 }

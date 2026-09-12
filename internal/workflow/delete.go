@@ -85,8 +85,8 @@ const teardownBackupVersion workflow.Version = 1
 // cancel-delete needs a live workflow and retry only replays provisioning. A
 // resumed run skips the CAS transition and the grace timer and runs straight
 // into teardown, ending with the same MarkTenantDeleted CAS as a normal run.
-// Teardown is idempotent (simulated here; drop-if-exists in a real cloud), so
-// replaying it is safe.
+// Teardown is idempotent (drop database / role IF EXISTS; identity delete
+// treats a missing user as success), so replaying it is safe.
 func DeleteTenantWorkflow(ctx workflow.Context, in DeleteInput) (err error) {
 	logger := workflow.GetLogger(ctx)
 	logger.Info("Starting DeleteTenantWorkflow", "TenantID", in.TenantID, "GracePeriod", in.GracePeriod, "Resume", in.Resume)
@@ -175,6 +175,14 @@ func DeleteTenantWorkflow(ctx workflow.Context, in DeleteInput) (err error) {
 	}
 
 	if err = workflow.ExecuteActivity(actCtx, activities.DeprovisionTenantActivityName, in.TenantID).Get(actCtx, nil); err != nil {
+		return err
+	}
+
+	// Identity teardown completes the saga: remove the Keycloak user the
+	// provision run created. This run can't read provision's userID variable,
+	// so the activity derives the username from tenantID and no-ops when it is
+	// already gone — a DLQ replay of a half-torn tenant converges.
+	if err = workflow.ExecuteActivity(actCtx, activities.DeleteTenantIdentityByTenantActivityName, in.TenantID).Get(actCtx, nil); err != nil {
 		return err
 	}
 
