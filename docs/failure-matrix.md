@@ -174,15 +174,30 @@ delete     (none)  reviving a half-torn-down tenant would be a lie — failure
 
 ### 3.7 Reconcile
 
-Not a linear saga: it loops `resolve → probe → repair → re-probe → converge`
-(or `skip` for non-active tenants). Covered by scenario tests
-(`ReconcileWorkflow_ConvergedWhenNoDrift`, `RepairsDriftAndConverges`,
-`UnconvergedAfterRepairFails`, `SkipsNonActiveTenant`,
-`SharedTenantConvergesWithoutProbe`).
+Not a linear saga: it loops `resolve → probe → detect drift → repair → re-probe
+→ converge` (or `skip` for non-active tenants), and it has **no
+compensation** — repairs are idempotent and the re-probe is the proof, not
+rollback. That changes its failure contract: a mid-run crash must fail the
+run and must NOT audit `MarkReconcileFailed` (reserved for the
+detected-unconverged branch).
 
-**Gap G1: reconcile is not in the fail-every-activity matrix** — a failure
-mid-`EnsureTenantDatabase` or between probe and converge is only covered by
-the scenario tests, not by the position-exact compensation assertions (§6).
+Coverage is now full and position-exact:
+
+- **Fast path** (already-converged): in the fail-every-activity matrix as
+  `reconcile-converged` — `ResolveTenantSpec / ProbeTenantActualState /
+  MarkReconcileConverged` each failing, any order.
+- **Repair path** (drift → repair → re-probe → converge):
+  `TestReconcileRepairPathActivityFailures` drives the branchy sequence
+  `Resolve → Probe → RecordReconcileDrift → EnsureTenantDatabase →
+  BackupTenantData → re-Probe (clean) → MarkReconcileConverged` as a
+  fail-every-activity loop with exact composition assertions: drift logging
+  runs only from position 2, ensure only from 3, backup only from 4, converged
+  only when it is itself the failure, `MarkReconcileFailed` **never** on a
+  mid-run crash. Failing mocks are persistent across retry attempts, so the
+  assertions hold under the workflow's `MaximumAttempts: 3` policy.
+- Scenarios: `ConvergedWhenNoDrift`, `RepairsDriftAndConverges`,
+  `UnconvergedAfterRepairFails` (the only legitimate `MarkReconcileFailed`
+  path), `SkipsNonActiveTenant`, `SharedTenantConvergesWithoutProbe`.
 
 ---
 
@@ -223,11 +238,11 @@ failed-runs view from the recorded demo.
 
 Automated coverage is strong on the linear sagas and weak on two edges:
 
-| # | Gap | Impact | Proposed automation |
+| # | Gap | Impact | Status |
 |---|---|---|---|
-| G1 | Reconcile workflow is not in `TestFailEveryActivity`; its activities (mid-repair failure, failure between probe and converge) are only scenario-covered | A reconcile that dies mid-repair is exactly the "plane crashed on the way to the gate" case the system exists for | Add `ReconcileTenantWorkflow` to the matrix with its own position-exact assertions, or add fail-every-activity subtests inside `reconcile_test.go` (ResolveTenantSpec, ProbeTenantActualState, EnsureTenantDatabase, RecordReconcileDrift, MarkReconcileConverged) |
-| G2 | No automated **live** chaos test: the controller is unit-tested and the demo is manual, but nothing in CI proves a chaos-injected failure lands as a failed `workflow_instances` row and that retry heals it | Regression risk on the interceptor/recorder/retry interaction (order of interceptors, error propagation) | Integration test: start real worker + Temporal with chaos rate 1 targeting one activity → assert row `status=failed` → retry via the API surface → assert row converges |
-| G3 | No full **retry-heals end-to-end** proof across the stack (handler → workflow → activities → real DB); resume is proven at the activity level only | The DLQ's promise ("retry converges") is demo-proven, not gate-proven | Pair with G2's live test: the retry leg makes it a single test |
+| G1 | Reconcile workflow not in `TestFailEveryActivity`; its activities (mid-repair failure, failure between probe and converge) were only scenario-covered | A reconcile that dies mid-repair is exactly the "plane crashed on the way to the gate" case the system exists for | ✅ **Closed** — fast path added to the matrix (`reconcile-converged`, harness gained `noTerminalOnFailure`: reconcile must NOT audit failure on a mid-run crash); branchy repair path driven by `TestReconcileRepairPathActivityFailures` with position-exact composition + retry-persistent failing mocks |
+| G2 | No automated **live** chaos test: the controller is unit-tested and the demo is manual, but nothing in CI proves a chaos-injected failure lands as a failed `workflow_instances` row and that retry heals it | Regression risk on the interceptor/recorder/retry interaction (order of interceptors, error propagation) | Open — integration test: start real worker + Temporal with chaos rate 1 targeting one activity → assert row `status=failed` → retry via the API surface → assert row converges |
+| G3 | No full **retry-heals end-to-end** proof across the stack (handler → workflow → activities → real DB); resume is proven at the activity level only | The DLQ's promise ("retry converges") is demo-proven, not gate-proven | Open — pair with G2's live test: the retry leg makes it a single test |
 
 Documented, accepted (not automating — see idempotency.md §4.2):
 RestoreData is not retry-idempotent (plain `psql -f`); mitigated by the

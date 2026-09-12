@@ -37,15 +37,20 @@ func rule(activity string, minIdx, maxIdx int, args ...any) compRule {
 // workflowMatrix maps one saga to its ordered activities, its compensation
 // rules, and its terminal failure audit activity.
 type workflowMatrix struct {
-	name        string
-	wf          any
-	input       any
-	activities  []string
-	comps       []compRule
-	terminal    string // terminal failure activity; always runs via the defer
-	successArgs []any  // args (after ctx) the success terminal is invoked with
-	register    func(env *testsuite.TestWorkflowEnvironment)
-	mock        func(env *testsuite.TestWorkflowEnvironment, failName string)
+	name       string
+	wf         any
+	input      any
+	activities []string
+	comps      []compRule
+	terminal   string // terminal failure activity; always runs via the defer
+	// noTerminalOnFailure is for workflows whose failure audit is NOT a
+	// deferred always-run: ReconcilationTenantWorkflow only calls
+	// MarkReconcileFailed when it DETECTS an unconverged re-probe, so a
+	// mid-repair crash must not fire it. The harness asserts NOT called.
+	noTerminalOnFailure bool
+	successArgs         []any // args (after ctx) the success terminal is invoked with
+	register            func(env *testsuite.TestWorkflowEnvironment)
+	mock                func(env *testsuite.TestWorkflowEnvironment, failName string)
 }
 
 // mockActivity registers the mock for one activity call. When failName equals
@@ -237,6 +242,39 @@ var matrices = []workflowMatrix{
 			mockActivity(env, failName, activities.MarkTenantDeleteFailedActivityName, []any{nil}, nil, matrixTenant)
 		},
 	},
+	{
+		// The LINEAR slice of reconciliation: an already-converged tenant's
+		// fast path. The branchy repair path (drift -> repair -> re-probe ->
+		// converge) is driven by TestReconcileRepairPathActivityFailures in
+		// reconcile_test.go because the harness cannot express a re-probe that
+		// returns clean only after repair.
+		//
+		// Reconciliation has NO compensation: repairs are idempotent and the
+		// re-probe is the proof, not rollback. A mid-run crash must fail the
+		// run and MUST NOT audit MarkReconcileFailed — that audit is reserved
+		// for the detected-unconverged branch (noTerminalOnFailure).
+		name:  "reconcile-converged",
+		wf:    ReconcileTenantWorkflow,
+		input: ReconcileInput{TenantID: matrixTenant},
+		activities: []string{
+			activities.ResolveTenantSpecActivityName,      // 0
+			activities.ProbeTenantActualStateActivityName, // 1
+			activities.MarkReconcileConvergedActivityName, // 2 — success terminal
+		},
+		comps:               nil,
+		terminal:            activities.MarkReconcileFailedActivityName,
+		noTerminalOnFailure: true,
+		successArgs:         []any{matrixTenant, []string{}},
+		register: func(env *testsuite.TestWorkflowEnvironment) {
+			env.RegisterActivity(activities.NewReconcileActivities(nil, nil, nil, nil, nil))
+		},
+		mock: func(env *testsuite.TestWorkflowEnvironment, failName string) {
+			mockActivity(env, failName, activities.ResolveTenantSpecActivityName, []any{matrixReconcileSpec(), nil}, []any{model.TenantSpec{}}, matrixTenant)
+			mockActivity(env, failName, activities.ProbeTenantActualStateActivityName, []any{matrixReconcileHealthy(), nil}, []any{model.ReconcileActualState{}}, matrixReconcileSpec())
+			mockActivity(env, failName, activities.MarkReconcileConvergedActivityName, []any{nil}, nil, matrixTenant, []string{})
+			mockActivity(env, failName, activities.MarkReconcileFailedActivityName, []any{nil}, nil, matrixTenant, mock.Anything)
+		},
+	},
 }
 
 // Shared fixtures for mocked activity return values.
@@ -248,6 +286,32 @@ var (
 	backupName    = "matrix-1.tar.gz"
 	backupRecord  = &model.Backup{ID: 123, Filename: backupName}
 )
+
+// matrixReconcileSpec / matrixReconcileHealthy are reconcile's fast-path
+// fixtures, parameterized on the shared matrixTenant: an active dedicated
+// tenant with database + backup requirements, probed perfectly healthy.
+func matrixReconcileSpec() model.TenantSpec {
+	return model.TenantSpec{
+		TenantID:        matrixTenant,
+		Status:          model.TenantStatusActive,
+		IsolationMode:   model.IsolationModeDedicated,
+		RequireDatabase: true,
+		RequireBackup:   true,
+	}
+}
+
+func matrixReconcileHealthy() model.ReconcileActualState {
+	return model.ReconcileActualState{
+		TenantID: matrixTenant,
+		Database: model.DatabaseActualState{
+			Exists:        true,
+			OwnerRole:     "tenant_matrix-t1",
+			PublicConnect: false,
+		},
+		RoleExists:       true,
+		CompletedBackups: 1,
+	}
+}
 
 // TestFailEveryActivity is the fail-every-activity matrix: for EVERY activity
 // of EVERY workflow, force exactly that activity to fail and verify the saga:
@@ -279,8 +343,15 @@ func TestFailEveryActivity(t *testing.T) {
 					t.Fatalf("expected workflow error when %s fails, got nil", actName)
 				}
 
-				// The deferred failure path must always audit.
-				env.AssertCalled(t, m.terminal, mock.Anything, matrixTenant)
+				// The deferred failure path must always audit — except
+				// reconcile, whose MarkReconcileFailed is reserved for the
+				// detected-unconverged branch and must NOT fire from a
+				// mid-run crash (noTerminalOnFailure).
+				if m.noTerminalOnFailure {
+					env.AssertNotCalled(t, m.terminal, mock.Anything, matrixTenant)
+				} else {
+					env.AssertCalled(t, m.terminal, mock.Anything, matrixTenant)
+				}
 
 				// Compensation must run exactly where the guard flags demand.
 				for _, c := range m.comps {

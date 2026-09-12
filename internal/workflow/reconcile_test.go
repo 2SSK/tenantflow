@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/2SSK/tenantflow/internal/activities"
@@ -214,4 +215,134 @@ func TestReconcileWorkflow_SharedTenantConvergesWithoutProbe(t *testing.T) {
 	env.AssertCalled(t, activities.MarkReconcileConvergedActivityName, mock.Anything, "acme-rec", []string{})
 	env.AssertNotCalled(t, activities.RecordReconcileDriftActivityName, mock.Anything, "acme-rec", mock.Anything)
 	env.AssertNotCalled(t, activities.EnsureTenantDatabaseActivityName, mock.Anything, "acme-rec")
+}
+
+// TestReconcileRepairPathActivityFailures is the fail-every-activity loop for
+// the BRANCHY repair path — the linear harness in failmatrix_test.go cannot
+// express it, because the re-probe must return CLEAN only after the repair
+// steps ran (and the harness only supports one stable mock per activity).
+//
+//	Resolve(0) → Probe(1) → RecordDrift(2) → EnsureDatabase(3) → Backup(4)
+//	  → Probe(5, now clean) → MarkConverged(6)
+//
+// For every failure position the run must: fail; NEVER audit
+// MarkReconcileFailed (reserved for the detected-unconverged branch, covered
+// by TestReconcileWorkflow_UnconvergedAfterRepairFails); never reach
+// MarkConverged unless position 6 itself failed; and the repair composition
+// must be position-exact (RecordDrift only from 2, EnsureDatabase only from
+// 3, Backup only from 4). Position 5 (the re-probe) gets its own row because
+// it shares the Probe activity name with position 1.
+func TestReconcileRepairPathActivityFailures(t *testing.T) {
+	drifted := model.ReconcileActualState{
+		TenantID:         "acme-rec",
+		Database:         model.DatabaseActualState{Exists: false},
+		RoleExists:       false,
+		CompletedBackups: 0,
+	}
+	healthy := healthyActualState()
+	spec := activeReconcileSpec()
+
+	cases := []struct {
+		name          string
+		fail          string // activity name, or "REPROBE" for position 5
+		wantDriftLog  bool   // RecordReconcileDrift ran before the failure
+		wantEnsure    bool   // EnsureTenantDatabase ran before the failure
+		wantBackup    bool   // BackupTenantData ran before the failure
+		wantConverged bool   // MarkConverged called (only when IT failed)
+	}{
+		{"resolve-fails", activities.ResolveTenantSpecActivityName, false, false, false, false},
+		{"probe-fails", activities.ProbeTenantActualStateActivityName, false, false, false, false},
+		{"drift-log-fails", activities.RecordReconcileDriftActivityName, true, false, false, false},
+		{"ensure-fails", activities.EnsureTenantDatabaseActivityName, true, true, false, false},
+		{"backup-fails", activities.BackupTenantDataActivityName, true, true, true, false},
+		{"converged-fails", activities.MarkReconcileConvergedActivityName, true, true, true, true},
+		{"reprobe-fails", "REPROBE", true, true, true, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := &testsuite.WorkflowTestSuite{}
+			env := ts.NewTestWorkflowEnvironment()
+
+			env.RegisterActivity(activities.NewReconcileActivities(nil, nil, nil, nil, nil))
+			env.RegisterActivity(activities.NewBackupActivities(nil, nil, nil))
+
+			mb := func(name string, fail bool, ok []any, failZeros []any, args ...any) {
+				c := env.OnActivity(name, append([]any{mock.Anything}, args...)...)
+				if fail {
+					ret := append([]any{}, failZeros...)
+					ret = append(ret, fmt.Errorf("matrix failure of %s", name))
+					c.Return(ret...)
+					return
+				}
+				c.Return(ok...)
+			}
+
+			mb(activities.ResolveTenantSpecActivityName, tc.fail == activities.ResolveTenantSpecActivityName,
+				[]any{spec, nil}, []any{model.TenantSpec{}}, "acme-rec")
+
+			// Probe #1 returns drifted; probe #2 (after repair) returns
+			// healthy. Retries matter: the workflow retries failed activities
+			// (MaximumAttempts 3), so a probe that must FAIL has to fail on
+			// every retry attempt — a .Once() error would let attempt 2
+			// succeed and the workflow would continue as if nothing happened.
+			switch {
+			case tc.fail == activities.ProbeTenantActualStateActivityName:
+				// Probe #1 is the failure target: fail persistently.
+				env.OnActivity(activities.ProbeTenantActualStateActivityName, mock.Anything, mock.Anything).
+					Return(model.ReconcileActualState{}, fmt.Errorf("matrix failure of probe"))
+			case tc.fail == "REPROBE":
+				// Probe #1 succeeds (drifted); the re-probe fails persistently.
+				env.OnActivity(activities.ProbeTenantActualStateActivityName, mock.Anything, mock.Anything).
+					Return(drifted, nil).Once()
+				env.OnActivity(activities.ProbeTenantActualStateActivityName, mock.Anything, mock.Anything).
+					Return(model.ReconcileActualState{}, fmt.Errorf("matrix failure of probe"))
+			default:
+				env.OnActivity(activities.ProbeTenantActualStateActivityName, mock.Anything, mock.Anything).
+					Return(drifted, nil).Once()
+				env.OnActivity(activities.ProbeTenantActualStateActivityName, mock.Anything, mock.Anything).
+					Return(healthy, nil).Once()
+			}
+
+			mb(activities.RecordReconcileDriftActivityName, tc.fail == activities.RecordReconcileDriftActivityName,
+				[]any{nil}, nil, "acme-rec", mock.Anything)
+			mb(activities.EnsureTenantDatabaseActivityName, tc.fail == activities.EnsureTenantDatabaseActivityName,
+				[]any{nil}, nil, "acme-rec")
+			mb(activities.BackupTenantDataActivityName, tc.fail == activities.BackupTenantDataActivityName,
+				[]any{&model.Backup{TenantID: "acme-rec"}, nil}, []any{nil}, "acme-rec")
+			mb(activities.MarkReconcileConvergedActivityName, tc.fail == activities.MarkReconcileConvergedActivityName,
+				[]any{nil}, nil, "acme-rec", mock.Anything)
+			mb(activities.MarkReconcileFailedActivityName, false,
+				[]any{nil}, nil, "acme-rec", mock.Anything)
+
+			env.ExecuteWorkflow(ReconcileTenantWorkflow, ReconcileInput{TenantID: "acme-rec"})
+
+			if !env.IsWorkflowCompleted() {
+				t.Fatal("workflow did not complete")
+			}
+			if err := env.GetWorkflowError(); err == nil {
+				t.Fatal("expected workflow error, got nil")
+			}
+
+			// A mid-repair crash must never audit failure — that audit is the
+			// unconverged branch's job, and it must not be polluted by crashes.
+			env.AssertNotCalled(t, activities.MarkReconcileFailedActivityName, mock.Anything, "acme-rec", mock.Anything)
+
+			// Composition exactness by failure position.
+			assertCall(t, env, tc.wantDriftLog, activities.RecordReconcileDriftActivityName, mock.Anything, "acme-rec", mock.Anything)
+			assertCall(t, env, tc.wantEnsure, activities.EnsureTenantDatabaseActivityName, mock.Anything, "acme-rec")
+			assertCall(t, env, tc.wantBackup, activities.BackupTenantDataActivityName, mock.Anything, "acme-rec")
+			assertCall(t, env, tc.wantConverged, activities.MarkReconcileConvergedActivityName, mock.Anything, "acme-rec", mock.Anything)
+		})
+	}
+}
+
+// assertCall asserts an activity was called (want=true) or not (want=false).
+func assertCall(t *testing.T, env *testsuite.TestWorkflowEnvironment, want bool, name string, args ...any) {
+	t.Helper()
+	if want {
+		env.AssertCalled(t, name, args...)
+	} else {
+		env.AssertNotCalled(t, name, args...)
+	}
 }
