@@ -75,6 +75,7 @@ func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, auditRe
 		{fn: provision.DropTenantDatabase, name: activities.DropTenantDatabaseActivityName},
 		{fn: identityActs.ProvisionTenantIdentity, name: activities.ProvisionTenantIdentityActivityName},
 		{fn: identityActs.DeleteTenantIdentity, name: activities.DeleteTenantIdentityActivityName},
+		{fn: identityActs.DeleteTenantIdentityByTenant, name: activities.DeleteTenantIdentityByTenantActivityName},
 		{fn: deprovision.MarkTenantDeleting, name: activities.MarkTenantDeletingActivityName},
 		{fn: deprovision.DeprovisionTenant, name: activities.DeprovisionTenantActivityName},
 		{fn: deprovision.MarkTenantDeleted, name: activities.MarkTenantDeletedActivityName},
