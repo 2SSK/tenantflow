@@ -83,12 +83,46 @@ func (k *KeycloakProvider) getAdminToken(ctx context.Context) (string, error) {
 	return k.adminToken, nil
 }
 
+func (k *KeycloakProvider) invalidateToken() {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.adminToken = ""
+	k.tokenExpiresAt = time.Time{}
+}
+
 func (k *KeycloakProvider) doAdminRequest(ctx context.Context, method, path string, body interface{}) (*http.Response, error) {
 	token, err := k.getAdminToken(ctx)
 	if err != nil {
 		return nil, err
 	}
 
+	resp, err := k.doAdminRequestWithToken(ctx, token, method, path, body)
+	if err != nil {
+		return resp, err
+	}
+
+	// Keycloak rejects an access token when the SSO session it was issued for
+	// idle-times out (master-realm session idle timeout is shorter than the
+	// token lifespan, so a cached token can 401 long before its JWT exp).
+	// The token may also be stale after a clock skew or a session revocation.
+	// Invalidate the cache and retry exactly once with a fresh token — a new
+	// password grant creates a new session, so this is self-healing. Exactly
+	// one retry: a genuine auth problem (e.g. the admin lost their role)
+	// surfaces the 401 to the caller, which is the current behavior anyway.
+	if resp.StatusCode == http.StatusUnauthorized {
+		resp.Body.Close()
+		k.invalidateToken()
+		token, err = k.getAdminToken(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return k.doAdminRequestWithToken(ctx, token, method, path, body)
+	}
+
+	return resp, nil
+}
+
+func (k *KeycloakProvider) doAdminRequestWithToken(ctx context.Context, token, method, path string, body interface{}) (*http.Response, error) {
 	var bodyReader io.Reader
 	if body != nil {
 		jsonBytes, err := json.Marshal(body)
