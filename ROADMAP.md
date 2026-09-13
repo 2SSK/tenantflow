@@ -882,7 +882,7 @@ Next.js app in `web/`:
 | --- | ---------------------------------------------------------- | ------ |
 | 12.1| README rewrite: 60-second story, architecture diagram, demo | ☑ story-first README; ASCII architecture; reliability docs surfaced; quick start via make; API table; real screenshots |
 | 12.2| Load test: 100 tenants, publish only real measured numbers  | ☑ |
-| 12.3| Demo video (60–120s: happy path + failure + DLQ + reconcile)| ☐ |
+| 12.3| Demo video (60–120s: happy path + failure + DLQ + reconcile)| ☑ |
 | 12.4| Live showcase ($0: docs site + Tailscale/Cloudflare tunnel or Oracle free VM) | ☐ |
 | 12.5| Blog posts (draft list in Showable Artifacts)               | ☐ |
 

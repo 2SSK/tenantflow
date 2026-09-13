@@ -32,6 +32,8 @@ Every claim above is **documented and test-enforced**, not asserted:
 
 - [`docs/idempotency.md`](docs/idempotency.md) — every operation × repeated execution, with live retry-window tests
 - [`docs/failure-matrix.md`](docs/failure-matrix.md) — every activity × failure → compensation range + proof
+- [`docs/load-test.md`](docs/load-test.md) — only real measured numbers (100-tenant runs, shared + dedicated)
+- [`docs/demo.md`](docs/demo.md) — one-take demo script (`scripts/demo/run-demo.sh`) + shot list for the 60–120s video
 - [`docs/adr/`](docs/adr/) — ADRs 0001–0007 recording *why* (Temporal, DB-per-tenant, saga, owner roles, soft delete…)
 
 ## Architecture
@@ -139,6 +141,8 @@ make integration     # real Postgres + real Keycloak (also runs in CI)
 |---|---|
 | [docs/idempotency.md](docs/idempotency.md) | What happens if every operation runs twice? |
 | [docs/failure-matrix.md](docs/failure-matrix.md) | What happens if any activity fails? |
+| [docs/load-test.md](docs/load-test.md) | Real numbers: 100-tenant provision/delete, shared + dedicated |
+| [docs/demo.md](docs/demo.md) + [scripts/demo/run-demo.sh](scripts/demo/run-demo.sh) | One-take demo: happy path → failure/DLQ → replay → reconcile |
 | [docs/adr/](docs/adr/) | Why these decisions? (7 ADRs) |
 | [ROADMAP.md](ROADMAP.md) | Build plan with completion tracking |
 | [CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md) | Contributing & reporting |
