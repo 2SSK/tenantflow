@@ -58,6 +58,27 @@ func (a *BackupActivities) BackupTenantData(ctx context.Context, tenantID string
 	log := logFor(ctx)
 	log.Info("Backing up tenant data", "tenantID", tenantID)
 
+	// Probe first: the pre-delete backup only has meaning while the live
+	// database exists. A DLQ replay of a saga that already ran
+	// DeprovisionTenant finds the database gone (deprovision drops it), and
+	// pg_dump on a missing DB fails — sending the replay straight back to the
+	// DLQ with no way to converge. Skipping here is safe:
+	//   - fresh delete, DB live       -> probe sees Exists -> normal backup
+	//   - replay after teardown       -> probe sees missing -> nothing left to
+	//     capture (first run already took the backup); converge instead
+	//   - externally torn-down tenant -> same as above; the tenant is already
+	//     gone, so the saga finishing is honest, not a data-loss gamble
+	// Shared-schema tenants never get a DB and the workflow already skips the
+	// backup for them, so this probe is a dedicated-path concern only.
+	state, err := a.provider.InspectDatabase(ctx, cloud.TenantDatabaseName(tenantID))
+	if err != nil {
+		return nil, fmt.Errorf("probe database for tenant %s before backup: %w", tenantID, err)
+	}
+	if !state.Exists {
+		log.Info("pre-delete backup skipped: database already absent", "tenantID", tenantID)
+		return &model.Backup{TenantID: tenantID, Filename: "(skipped: database absent)"}, nil
+	}
+
 	backupName, err := a.provider.SnapshotDatabase(ctx, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("snapshot tenant %s: %w", tenantID, err)
