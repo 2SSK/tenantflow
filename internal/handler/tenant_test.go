@@ -495,8 +495,11 @@ func TestDeleteTenant(t *testing.T) {
 				if stub.startedOptions.ID != "delete-acme" {
 					t.Errorf("workflow ID = %q, want delete-acme", stub.startedOptions.ID)
 				}
-				if stub.startedOptions.WorkflowIDReusePolicy != enums.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE {
-					t.Errorf("reuse policy = %v, want REJECT_DUPLICATE", stub.startedOptions.WorkflowIDReusePolicy)
+				// ALLOW_DUPLICATE_FAILED_ONLY: a closed FAILED delete run must
+				// not brick re-deletion after a DLQ replay reactivates the
+				// tenant; a RUNNING or closed-successful run still rejects.
+				if stub.startedOptions.WorkflowIDReusePolicy != enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE_FAILED_ONLY {
+					t.Errorf("reuse policy = %v, want ALLOW_DUPLICATE_FAILED_ONLY", stub.startedOptions.WorkflowIDReusePolicy)
 				}
 				in, ok := stub.startedArgs[0].(tfworkflow.DeleteInput)
 				if !ok || in.TenantID != "acme" {

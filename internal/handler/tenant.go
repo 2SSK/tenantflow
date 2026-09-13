@@ -445,12 +445,20 @@ func (h *TenantHandler) DeleteTenant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Reuse policy: a fresh delete is legal after a previous delete run is
+	// CLOSED and FAILED (the DLQ replay path reactivates the tenant, and a
+	// re-delete of an active tenant must be possible), and illegal while one
+	// is running or closed-successfully. ALLOW_DUPLICATE_FAILED_ONLY is
+	// exactly that; REJECT_DUPLICATE (the naive choice) permanently bricks
+	// re-deletion after a replay because the closed run still "exists"
+	// (observed live: tenant active again after replay, DELETE refused with
+	// "deletion already in progress" forever).
 	workflowID := "delete-" + tenantID
 
 	run, err := h.temporal.ExecuteWorkflow(r.Context(), client.StartWorkflowOptions{
 		ID:                                       workflowID,
 		TaskQueue:                                tfworkflow.TaskQueue,
-		WorkflowIDReusePolicy:                    enums.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
+		WorkflowIDReusePolicy:                    enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE_FAILED_ONLY,
 		WorkflowExecutionErrorWhenAlreadyStarted: true,
 	}, tfworkflow.DeleteTenantWorkflow, tfworkflow.DeleteInput{
 		TenantID:      tenantID,
