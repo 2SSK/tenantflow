@@ -65,6 +65,7 @@ func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, auditRe
 		tfworkflow.RestoreTenantWorkflow,
 		tfworkflow.DeleteTenantWorkflow,
 		tfworkflow.ReconcileTenantWorkflow,
+		tfworkflow.ReconcileSweepWorkflow,
 	})
 
 	registerActivities(sdk, []activityRegistration{
@@ -114,6 +115,7 @@ func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, auditRe
 		{fn: reconcile.MarkReconcileConverged, name: activities.MarkReconcileConvergedActivityName},
 		{fn: reconcile.MarkReconcileSkipped, name: activities.MarkReconcileSkippedActivityName},
 		{fn: reconcile.MarkReconcileFailed, name: activities.MarkReconcileFailedActivityName},
+		{fn: reconcile.ListActiveTenantIDs, name: activities.ListActiveTenantIDsActivityName},
 	})
 
 	return &Worker{log: log, sdk: sdk}

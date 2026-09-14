@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Config holds all runtime settings for the API.
@@ -28,6 +29,11 @@ type Config struct {
 	// WorkerMetricsAddr is the listen address for the worker's Prometheus
 	// scrape endpoint (":9091" by default).
 	WorkerMetricsAddr string
+
+	// ReconcileSweepInterval is how often the scheduled reconcile sweep (Phase
+	// 14) runs. 0 disables the sweep entirely (the worker boots without
+	// starting the loop). Default is 10m.
+	ReconcileSweepInterval time.Duration
 
 	// Chaos controls the worker's failure-injection switch (Phase 8).
 	Chaos ChaosConfig
@@ -71,6 +77,12 @@ func Load() (Config, error) {
 
 	// Worker-side Prometheus scrape endpoint. The API reuses HTTPPort.
 	cfg.WorkerMetricsAddr = getEnv("TENANTFLOW_WORKER_METRICS_ADDR", ":9091")
+
+	interval, err := getEnvDuration("TENANTFLOW_RECONCILE_SWEEP_INTERVAL", 10*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ReconcileSweepInterval = interval
 
 	if cfg.Env != "development" && cfg.Env != "production" {
 		return Config{}, fmt.Errorf("TENANTFLOW_ENV must be development or production, got %q", cfg.Env)
@@ -126,4 +138,19 @@ func getEnvInt(key string, fallback int) (int, error) {
 		return 0, fmt.Errorf("invalid value for %s: %q (must be an integer)", key, v)
 	}
 	return n, nil
+}
+
+// getEnvDuration is getEnv for durations ("30s", "10m"). An empty var falls
+// back silently; a non-empty invalid value is a hard error so a typo in a
+// duration never disables or accelerates a loop by accident.
+func getEnvDuration(key string, fallback time.Duration) (time.Duration, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, fmt.Errorf("invalid value for %s: %q (must be a duration like 5m or 1h)", key, v)
+	}
+	return d, nil
 }

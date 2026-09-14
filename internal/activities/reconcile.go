@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
@@ -24,6 +25,9 @@ const (
 	MarkReconcileFailedActivityName        = "MarkReconcileFailed"
 	RestoreTenantFromBackupActivityName    = "RestoreTenantFromBackup"
 	MarkReconcileUnrecoverableActivityName = "MarkReconcileUnrecoverable"
+	// ListActiveTenantIDsActivityName feeds the scheduled reconcile sweep
+	// (Phase 14): each tick the sweep asks which tenants need attention.
+	ListActiveTenantIDsActivityName = "ListActiveTenantIDs"
 )
 
 // ErrNoVerifiedBackup is the sentinel RestoreTenantFromBackup returns when the
@@ -98,6 +102,24 @@ func (a *ReconcileActivities) ResolveTenantSpec(ctx context.Context, tenantID st
 		RequireDatabase: dedicated,
 		RequireBackup:   dedicated,
 	}, nil
+}
+
+// ListActiveTenantIDs returns the tenants the scheduled sweep should look at:
+// every ledger row in the active state. A deterministic (sorted) order keeps
+// the sweep's behavior stable across replays and workers.
+func (a *ReconcileActivities) ListActiveTenantIDs(ctx context.Context) ([]string, error) {
+	tenants, err := a.repo.ListTenants(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list tenants: %w", err)
+	}
+	ids := make([]string, 0, len(tenants))
+	for _, t := range tenants {
+		if t.Status == model.TenantStatusActive {
+			ids = append(ids, t.TenantID)
+		}
+	}
+	slices.Sort(ids)
+	return ids, nil
 }
 
 // ProbeTenantActualState reads the real world: the provider reports on the

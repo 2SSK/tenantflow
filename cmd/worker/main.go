@@ -9,10 +9,15 @@ import (
 	"os"
 	"time"
 
+	"go.temporal.io/api/enums/v1"
+	"go.temporal.io/api/serviceerror"
+	"go.temporal.io/sdk/client"
+
 	"github.com/2SSK/tenantflow/internal/app"
 	"github.com/2SSK/tenantflow/internal/chaos"
 	"github.com/2SSK/tenantflow/internal/metrics"
 	tfworker "github.com/2SSK/tenantflow/internal/worker"
+	tfworkflow "github.com/2SSK/tenantflow/internal/workflow"
 )
 
 func main() {
@@ -49,6 +54,14 @@ func run() error {
 		metricsErr <- metricsSrv.ListenAndServe()
 	}()
 
+	if a.Config.ReconcileSweepInterval > 0 {
+		if err := startReconcileSweep(ctx, a); err != nil {
+			return err
+		}
+	} else {
+		a.Log.Info("reconcile sweep disabled", "interval", a.Config.ReconcileSweepInterval)
+	}
+
 	runErr := w.Run()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -66,4 +79,35 @@ func run() error {
 	}
 
 	return runErr
+}
+
+// startReconcileSweep asks Temporal to start the long-running sweep driver
+// under its fixed workflow ID. ALLOW_DUPLICATE + ErrorWhenAlreadyStarted makes
+// this idempotent across worker restarts: if a sweep is already alive (this
+// worker or another), the start collides and we log and move on — exactly one
+// sweep runs for the whole stack, no matter how many times workers reboot.
+func startReconcileSweep(ctx context.Context, a *app.App) error {
+	a.Log.Info("starting reconcile sweep",
+		"interval", a.Config.ReconcileSweepInterval,
+		"workflowID", tfworkflow.ReconcileSweepWorkflowID)
+
+	run, err := a.TC.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
+		ID:                                       tfworkflow.ReconcileSweepWorkflowID,
+		TaskQueue:                                tfworkflow.TaskQueue,
+		WorkflowIDReusePolicy:                    enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
+		WorkflowExecutionErrorWhenAlreadyStarted: true,
+	}, tfworkflow.ReconcileSweepWorkflow, tfworkflow.ReconcileSweepInput{
+		Interval: a.Config.ReconcileSweepInterval,
+	})
+	if err != nil {
+		var already *serviceerror.WorkflowExecutionAlreadyStarted
+		if errors.As(err, &already) {
+			a.Log.Info("reconcile sweep already running, skipping start")
+			return nil
+		}
+		return fmt.Errorf("start reconcile sweep: %w", err)
+	}
+
+	a.Log.Info("reconcile sweep started", "runID", run.GetID())
+	return nil
 }

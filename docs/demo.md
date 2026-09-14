@@ -93,6 +93,13 @@ BOTH drifts; `missing_backup` is included because a dedicated tenant that
 has never been backed up is not yet delete-safe. That is real behavior, and
 the reconcile repairs both in one pass.
 
+> **Live note:** The operator doesn't need to remember to POST manually —
+> since Phase 14, `ReconcileSweepWorkflow` runs on a configurable interval
+> (`TENANTFLOW_RECONCILE_SWEEP_INTERVAL`, default 10m), picks up every
+> active tenant, and starts a `reconcile-<id>` child. A collision with the
+> manual call above is harmless: both share the same workflow ID, so the
+> second start is `AlreadyStarted` → skipped.
+
 ---
 
 ## Beat 5 — Data safety: external DROP DATABASE → restore from backup (1:40–2:00)

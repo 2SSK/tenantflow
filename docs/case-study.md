@@ -171,9 +171,15 @@ soft-delete with 2s grace):
   reimplementation, not a redesign.
 - Soak + multi-worker scale-out (already-scoped, measured in the load-test
   "not measured" note).
-- Scheduled reconcile (the loop currently runs on demand / via the
-  auto-repair trigger injected in tests and the API); an interval plus
-  per-tenant jitter is the natural next control.
+- Scheduled reconcile — implemented in Phase 14 as `ReconcileSweepWorkflow`
+  (fixed workflow ID `reconcile-sweep`): every `TENANTFLOW_RECONCILE_SWEEP_INTERVAL`
+  (default 10m) it enumerates ACTIVE tenants, starts one `reconcile-<id>`
+  child per tenant under the SAME workflow ID the manual endpoint uses, so an
+  in-flight collision (manual call, or a second worker's tick) surfaces as
+  `WorkflowExecutionAlreadyStarted` and is skipped — never a second workflow.
+  `ContinueAsNew` every 100 sweeps bounds history on the forever loop. Honest
+  remaining gap: per-tenant jitter (all tenants sweep on the same interval)
+  is still future work.
 - Alerting on DLQ depth and `TENANT_RECONCILE_UNRECOVERABLE` (the
   observability surface — audit events, metrics, recorder — is already there).
 - Keycloak high availability and token-refresh hardening (the admin-token
@@ -189,5 +195,7 @@ soft-delete with 2s grace):
   automated restore-on-restore validation. The restore path itself is
   exercised (live 13.1) but a scheduled restore check is future work.
 - The load test is lifecycle-throughput, not sustained soak.
-- The reconcile loop is event-driven/on-demand; "drift detected within N
-  minutes" is not yet a measured SLO.
+- The reconcile loop is interval-driven (Phase 14 sweep) plus on-demand; all
+  active tenants tick on the same cadence (no per-tenant jitter), so "drift
+  detected within N minutes" is bounded by the interval but not yet a
+  measured SLO.

@@ -904,6 +904,17 @@ Next.js app in `web/`:
 | 13.4| CAS concurrency: explicit conflict tests (repo unit + live) — one op wins, other 409s, no corruption | ☑ |
 | 13.5| Final case-study doc (architecture + engineering narrative) | ☑ |
 
+### Phase 14 — Operational loop
+
+| #   | Task                                                       | Status |
+| --- | ---------------------------------------------------------- | ------ |
+| 14.1| Environment sweep: decommission load-test pile, restore 2s delete grace on API, terminate orphan workflows | ☑ |
+| 14.2| Scheduled reconcile sweep: `ReconcileSweepWorkflow` driver (list actives → reconcile-<id> children, same-ID dedup vs manual calls, interval sleep, ContinueAsNew history bound) | ☑ |
+| 14.3| Config: `TENANTFLOW_RECONCILE_SWEEP_INTERVAL` (default 10m, 0 = disabled, invalid = hard error) + worker boot-time idempotent start | ☑ |
+| 14.4| Tests: sweep driver (per-tenant child per tick, in-list dedup, cadence, ContinueAsNew bound, bad-interval fail) | ☑ |
+| 14.5| Failure-matrix row: sweep × in-flight manual reconcile → skip, no double-reconcile | ☑ |
+| 14.6| Case-study §6/§7 update: scheduled sweep implemented; honest note — per-tenant jitter still future | ☑ |
+
 ---
 
 ## 13. Learning Goals Checklist

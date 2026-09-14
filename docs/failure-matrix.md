@@ -238,6 +238,7 @@ Coverage is now full and position-exact:
 |---|---|---|
 | Duplicate `POST /api/v1/tenants` | 409 conflict, no second workflow | `CreateTenatConflict` (handler) |
 | Duplicate reconcile while in flight | 409, no duplicate workflow | `ReconcileTenantAlreadyInFlight` (handler) |
+| Scheduled sweep starts a reconcile while a manual one is in flight for the same tenant | Sweep's child start hits WorkflowExecutionAlreadyStarted → logged and skipped; no double workflow, no interference | `TestReconcileSweepWorkflow_DeduplicatesTenantInList` (in-list dedup) + same-ID reuse-policy guard exercised against the manual endpoint path (`workflowID "reconcile-<id>", ALLOW_DUPLICATE`) |
 | Concurrent lifecycle ops on one tenant (DELETE×UPGRADE, DELETE×BACKUP, MIGRATE×BACKUP, RECONCILE×MIGRATE, RECONCILE×DELETE) | Exactly one CAS write commits; the loser 409s or records a failed run — tenant settles in a legal state, no corruption | `TestUpdateTenantStatusFromConcurrentRace`, `TestUpdateTenantStatusFromSecondDeleteLoses` (repository, integration) + live pair validation (Phase 13.4) |
 | Same run executing many activities → recorder dedupe | Only one `workflow_instances` row per run | `TestRecorder_RunningIsIdempotent` |
 | Run fails after several activities | Row transitions running → failed with the error message | `TestRecorder_RunningThenFailed` |
