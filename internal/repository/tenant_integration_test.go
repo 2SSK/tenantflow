@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -169,5 +170,142 @@ func TestUpdateTenantStatusFromRejectsIllegalSource(t *testing.T) {
 	if got.Status != model.TenantStatusProvisioning {
 		t.Errorf("Status = %q, want %q (conflict must not write)",
 			got.Status, model.TenantStatusProvisioning)
+	}
+}
+
+// TestUpdateTenantStatusFromConcurrentRace proves the CAS is race-safe: many
+// concurrent transitions from the same source status, exactly one wins, all
+// losers get ErrStatusConflict, and the row ends in the winner's state. This
+// is the shared mechanism behind every named concurrency hazard in Phase 13.4
+// (DELETE×UPGRADE, DELETE×BACKUP, MIGRATE×BACKUP, RECONCILE×MIGRATE,
+// RECONCILE×DELETE): all of them reduce to "two CAS writers collide, one
+// commits atomically".
+func TestUpdateTenantStatusFromConcurrentRace(t *testing.T) {
+	pool := testPool(t)
+	repo := NewPostgresTenantRepository(pool)
+	ctx := context.Background()
+
+	id := uniqueTenantID("test-cas-race")
+	ten := &model.Tenant{TenantID: id, Status: model.TenantStatusProvisioning}
+	if err := repo.CreateTenant(ctx, ten); err != nil {
+		t.Fatalf("CreateTenant: %v", err)
+	}
+
+	// 3 racers, each targeting a different successor of "provisioning".
+	targets := []model.TenantStatus{
+		model.TenantStatusActive,
+		model.TenantStatusDeleting,
+		model.TenantStatusFailed,
+	}
+	source := model.TenantStatusProvisioning
+
+	const workers = 30
+	type result struct {
+		target model.TenantStatus
+		err    error
+	}
+	results := make(chan result, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		target := targets[i%len(targets)]
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := repo.UpdateTenantStatusFrom(ctx, id, target, source)
+			results <- result{target: target, err: err}
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	wins := 0
+	conflicts := 0
+	winner := model.TenantStatus("")
+	var otherErrs []error
+	for r := range results {
+		switch {
+		case r.err == nil:
+			wins++
+			winner = r.target
+		case errors.Is(r.err, ErrStatusConflict):
+			conflicts++
+		default:
+			otherErrs = append(otherErrs, r.err)
+		}
+	}
+
+	if wins != 1 {
+		t.Fatalf("wins = %d, want exactly 1 (the CAS must be atomic: 30 racers, 1 winner)", wins)
+	}
+	if conflicts != workers-1 {
+		t.Errorf("conflicts = %d, want %d; other errors = %v", conflicts, workers-1, otherErrs)
+	}
+
+	// The final row must be the winner's target — no interleaving corruption.
+	got, err := repo.GetTenant(ctx, id)
+	if err != nil {
+		t.Fatalf("GetTenant: %v", err)
+	}
+	if got.Status != winner {
+		t.Errorf("final Status = %q, want %q (losers must not have written)", got.Status, winner)
+	}
+	if winner == "" || winner == model.TenantStatusProvisioning {
+		t.Errorf("winner = %q, want one of the targets", winner)
+	}
+}
+
+// TestUpdateTenantStatusFromCommissionedToDeletingRace models the DELETE×*
+// family specifically: a delete CAS (active|failed -> deleting) racing a
+// second delete CAS from the same source. The tenant is commissioned in a
+// background write that must NOT be visible to the delete writers until they
+// have already committed — this catches the "both thought they were active"
+// blind-spot that a status-only CAS cannot detect without the source check.
+func TestUpdateTenantStatusFromSecondDeleteLoses(t *testing.T) {
+	pool := testPool(t)
+	repo := NewPostgresTenantRepository(pool)
+	ctx := context.Background()
+
+	id := uniqueTenantID("test-cas-delrace")
+	ten := &model.Tenant{TenantID: id, Status: model.TenantStatusActive}
+	if err := repo.CreateTenant(ctx, ten); err != nil {
+		t.Fatalf("CreateTenant: %v", err)
+	}
+
+	// Two deletes from the same source: the postgres row-level lock serializes
+	// them, so exactly one transition commits.
+	results := make(chan error, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results <- repo.UpdateTenantStatusFrom(ctx, id, model.TenantStatusDeleting,
+				model.TenantStatusActive, model.TenantStatusFailed)
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	wins, conflicts := 0, 0
+	for err := range results {
+		switch {
+		case err == nil:
+			wins++
+		case errors.Is(err, ErrStatusConflict):
+			conflicts++
+		default:
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if wins != 1 || conflicts != 1 {
+		t.Fatalf("wins=%d conflicts=%d, want 1/1 (double-delete must be one-winner)",
+			wins, conflicts)
+	}
+	got, err := repo.GetTenant(ctx, id)
+	if err != nil {
+		t.Fatalf("GetTenant: %v", err)
+	}
+	if got.Status != model.TenantStatusDeleting {
+		t.Errorf("final Status = %q, want %q", got.Status, model.TenantStatusDeleting)
 	}
 }

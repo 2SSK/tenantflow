@@ -95,6 +95,38 @@ the reconcile repairs both in one pass.
 
 ---
 
+## Beat 5 — Data safety: external DROP DATABASE → restore from backup (1:40–2:00)
+
+**Narration:** "The strongest guarantee. Someone — an attacker, a runaway
+script, a careless engineer — drops the tenant's whole database. The
+reconciler's job is not guesswork: it restores the tenant from its latest
+verified backup, with zero data loss. Notice the proof: the marker row is
+still there, so this is a real restore, not a brand-new empty database."
+
+On screen:
+
+1. `demo-safe-…` provisioned; a `marker` table seeded with `alive` —
+   "this is what must survive".
+2. `POST …/reconcile` → the reconciler detects `missing_backup` and captures
+   a completed backup of the live database (poll shows the row flip to
+   `completed`).
+3. External disaster: `DROP DATABASE "tenant_demo-safe-…"
+   WITH (FORCE);` — the whole database disappears out of band.
+4. `POST …/reconcile` again → timeline shows `TENANT_DRIFT_DETECTED`
+   `["missing_database"]` → **`TENANT_RECONCILE_RESTORED`** →
+   `TENANT_RECONCILE_CONVERGED` `["missing_database"]`.
+5. Query the marker again: `alive` — restored from backup, not recreated
+   empty.
+
+**Why this is worth a beat:** it is the operational failure a multitenant
+platform can't talk its way out of for free. The counterpart — no verified
+backup exists → the reconciler refuses to recreate an empty database and
+escalates to the DLQ with `TENANT_RECONCILE_UNRECOVERABLE` — is real but
+dramatically dark for the video; it is covered in tests and the failure
+matrix.
+
+---
+
 ## What NOT to say (it's not measured)
 
 - No throughput claims in the video — those live in

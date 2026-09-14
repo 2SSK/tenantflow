@@ -40,6 +40,15 @@ const (
 	AuditEventTenantReconcileConverged AuditEventType = "TENANT_RECONCILE_CONVERGED"
 	AuditEventTenantReconcileSkipped   AuditEventType = "TENANT_RECONCILE_SKIPPED"
 	AuditEventTenantReconcileFailed    AuditEventType = "TENANT_RECONCILE_FAILED"
+	// TENANT_RECONCILE_RESTORED means a missing database was recreated from
+	// the tenant's latest verified backup (data recovered, not resynthesized).
+	AuditEventTenantReconcileRestored AuditEventType = "TENANT_RECONCILE_RESTORED"
+	// TENANT_RECONCILE_UNRECOVERABLE means a missing database had NO verified
+	// backup: the plane refuses to silently create an empty replacement and
+	// escalates to the DLQ so an operator decides (restore manually or
+	// delete). Creating an empty DB here would look like convergence while
+	// destroying every datum the tenant used to have.
+	AuditEventTenantReconcileUnrecoverable AuditEventType = "TENANT_RECONCILE_UNRECOVERABLE"
 )
 
 type AuditEvent struct {

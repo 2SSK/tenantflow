@@ -15,14 +15,48 @@ import (
 )
 
 const (
-	ResolveTenantSpecActivityName      = "ResolveTenantSpec"
-	ProbeTenantActualStateActivityName = "ProbeTenantActualState"
-	EnsureTenantDatabaseActivityName   = "EnsureTenantDatabase"
-	RecordReconcileDriftActivityName   = "RecordReconcileDrift"
-	MarkReconcileConvergedActivityName = "MarkReconcileConverged"
-	MarkReconcileSkippedActivityName   = "MarkReconcileSkipped"
-	MarkReconcileFailedActivityName    = "MarkReconcileFailed"
+	ResolveTenantSpecActivityName          = "ResolveTenantSpec"
+	ProbeTenantActualStateActivityName     = "ProbeTenantActualState"
+	EnsureTenantDatabaseActivityName       = "EnsureTenantDatabase"
+	RecordReconcileDriftActivityName       = "RecordReconcileDrift"
+	MarkReconcileConvergedActivityName     = "MarkReconcileConverged"
+	MarkReconcileSkippedActivityName       = "MarkReconcileSkipped"
+	MarkReconcileFailedActivityName        = "MarkReconcileFailed"
+	RestoreTenantFromBackupActivityName    = "RestoreTenantFromBackup"
+	MarkReconcileUnrecoverableActivityName = "MarkReconcileUnrecoverable"
 )
+
+// ErrNoVerifiedBackup is the sentinel RestoreTenantFromBackup returns when the
+// tenant has no completed, verifiable backup to restore from. The workflow
+// treats it specially: escalate to the DLQ instead of retrying (a retry won't
+// manufacture a backup that never existed) and NEVER fall back to creating an
+// empty replacement database.
+var ErrNoVerifiedBackup = errors.New("no verified backup to restore from")
+
+// NoVerifiedBackupErrorType is the Temporal ApplicationError type carries the
+// sentinel across the activity boundary (plain errors lose identity when
+// serialized, so the workflow checks the typed error instead of errors.Is on
+// a raw sentinel).
+const NoVerifiedBackupErrorType = "NoVerifiedBackup"
+
+// NewNoVerifiedBackupError wraps the sentinel in a NON-RETRYABLE typed
+// ApplicationError: retrying cannot manufacture a backup, so the escalation
+// must skip both the activity retry policy AND the workflow retry path and
+// reach the DLQ immediately.
+func NewNoVerifiedBackupError() error {
+	return temporal.NewNonRetryableApplicationError(ErrNoVerifiedBackup.Error(), NoVerifiedBackupErrorType, ErrNoVerifiedBackup)
+}
+
+// IsNoVerifiedBackup reports whether err is the no-verified-backup escalation,
+// whether it arrives as the raw sentinel (in-process) or as the typed
+// ApplicationError (across a worker boundary or a mocked activity).
+func IsNoVerifiedBackup(err error) bool {
+	if errors.Is(err, ErrNoVerifiedBackup) {
+		return true
+	}
+	var appErr *temporal.ApplicationError
+	return errors.As(err, &appErr) && appErr.Type() == NoVerifiedBackupErrorType
+}
 
 // ReconcileActivities implement the reconciliation loop's legs: resolve the
 // DESIRED state, probe the ACTUAL state, repair drift with provider
@@ -216,6 +250,75 @@ func (a *ReconcileActivities) MarkReconcileFailed(ctx context.Context, tenantID,
 		a.reg.ReconcileRuns.WithLabelValues("failed").Inc()
 	}
 	return a.writeAudit(ctx, tenantID, model.AuditEventTenantReconcileFailed, map[string]any{"reason": reason})
+}
+
+// RestoreTenantFromBackup is the data-safety repair for a MISSING database:
+// recreate the database with the tenant's latest verified backup and prove it
+// is valid. An active dedicated tenant's database once existed, so a missing
+// database is potential data loss — the only safe repairs are "restore the
+// data" or "escalate to an operator"; synthesizing an empty database is
+// neither and must never happen.
+//
+// Returns ErrNoVerifiedBackup (sentinel) when no completed backup exists so
+// the workflow can escalate instead of pretending to converge.
+//
+// The provider's restore primitive loads a dump into an EXISTING database, so
+// this activity creates the database first (with correct ownership), then
+// restores, then re-applies ownership and validates. All three primitives are
+// idempotent under Temporal retries.
+func (a *ReconcileActivities) RestoreTenantFromBackup(ctx context.Context, tenantID string) error {
+	logFor(ctx).Info("restoring tenant database from latest verified backup", "tenantID", tenantID)
+
+	backups, err := a.backupRepo.ListBackups(ctx, tenantID)
+	if err != nil {
+		return fmt.Errorf("list backups for tenant %s: %w", tenantID, err)
+	}
+	// ListBackups orders by created_at DESC, so the first completed row is the
+	// newest verifiable point-in-time snapshot.
+	var latest *model.Backup
+	for i := range backups {
+		if backups[i].Status == model.BackupStatusCompleted {
+			latest = &backups[i]
+			break
+		}
+	}
+	if latest == nil {
+		return NewNoVerifiedBackupError()
+	}
+
+	dbName := cloud.TenantDatabaseName(tenantID)
+	if err := a.provider.CreateDatabase(ctx, tenantID); err != nil {
+		return fmt.Errorf("recreate database for tenant %s: %w", tenantID, err)
+	}
+	if err := a.provider.RestoreDatabaseFromBackup(ctx, dbName, latest.Filename); err != nil {
+		return fmt.Errorf("restore backup %q into %s: %w", latest.Filename, dbName, err)
+	}
+	// A dump can carry its own ownership/connect statements; re-apply the
+	// tenant isolation shape so the restored database matches the desired
+	// state by construction.
+	if err := a.provider.EnsureDatabaseOwnership(ctx, dbName); err != nil {
+		return fmt.Errorf("re-apply ownership after restore for tenant %s: %w", tenantID, err)
+	}
+	if err := a.provider.ValidateDatabase(ctx, dbName); err != nil {
+		return fmt.Errorf("validate restored database %s: %w", dbName, err)
+	}
+
+	return a.writeAudit(ctx, tenantID, model.AuditEventTenantReconcileRestored,
+		map[string]any{"backup_id": latest.ID, "filename": latest.Filename})
+}
+
+// MarkReconcileUnrecoverable records a run the plane refuses to auto-repair:
+// the tenant's database is missing and no verified backup exists to restore
+// it from. The workflow then returns a NON-RETRYABLE error so the instance
+// goes straight to the DLQ (retrying cannot help, and pretending to converge
+// would destroy tenant data perception of safety).
+func (a *ReconcileActivities) MarkReconcileUnrecoverable(ctx context.Context, tenantID, reason string) error {
+	logFor(ctx).Error("reconciliation unrecoverable, escalating to operator", "tenantID", tenantID, "reason", reason)
+
+	if a.reg != nil {
+		a.reg.ReconcileRuns.WithLabelValues("unrecoverable").Inc()
+	}
+	return a.writeAudit(ctx, tenantID, model.AuditEventTenantReconcileUnrecoverable, map[string]any{"reason": reason})
 }
 
 func (a *ReconcileActivities) writeAudit(ctx context.Context, tenantID string, eventType model.AuditEventType, payload map[string]any) error {

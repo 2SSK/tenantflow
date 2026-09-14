@@ -109,6 +109,8 @@ func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, auditRe
 		{fn: reconcile.ProbeTenantActualState, name: activities.ProbeTenantActualStateActivityName},
 		{fn: reconcile.EnsureTenantDatabase, name: activities.EnsureTenantDatabaseActivityName},
 		{fn: reconcile.RecordReconcileDrift, name: activities.RecordReconcileDriftActivityName},
+		{fn: reconcile.RestoreTenantFromBackup, name: activities.RestoreTenantFromBackupActivityName},
+		{fn: reconcile.MarkReconcileUnrecoverable, name: activities.MarkReconcileUnrecoverableActivityName},
 		{fn: reconcile.MarkReconcileConverged, name: activities.MarkReconcileConvergedActivityName},
 		{fn: reconcile.MarkReconcileSkipped, name: activities.MarkReconcileSkippedActivityName},
 		{fn: reconcile.MarkReconcileFailed, name: activities.MarkReconcileFailedActivityName},

@@ -33,6 +33,11 @@ type ReconcileResult struct {
 // reusing the same provider primitives the other sagas use, then RE-PROBE to
 // prove convergence instead of trusting the repair.
 //
+// Scope: this is DATABASE-INFRASTRUCTURE reconciliation for dedicated tenants
+// (database exists + isolation shape + owner role + backup policy). It does
+// not reconcile tenant identity, application data, or shared-schema rows —
+// anything not covered by a provider/backup primitive drifts undetected.
+//
 // Flow:
 //
 //	resolve spec ──► probe ──► detect drift ──► (none) ──► converged, done
@@ -41,8 +46,18 @@ type ReconcileResult struct {
 //	                                                               │
 //	                                              still drifted ──┴──► fail (DLQ)
 //
-// A failed run lands in the failed-runs/DLQ view like every other workflow,
-// so an operator can retry it after the underlying cause is fixed.
+// DATA-SAFETY RULE (missing database): an active dedicated tenant's database
+// once existed, so a missing database is potential data loss. The only safe
+// repairs are (1) restore from the latest verified backup, or (2) escalate to
+// the DLQ when no verified backup exists. Synthesizing an empty replacement
+// database and calling the tenant converged would DESTROY the tenant's data
+// (and the operator's ability to notice). The restore/escalate decision is
+// made in an activity and signalled back via the ErrNoVerifiedBackup sentinel
+// so the workflow stays deterministic.
+//
+// A failed or unrecoverable run lands in the failed-runs/DLQ view like every
+// other workflow, so an operator can retry it after the underlying cause is
+// fixed.
 func ReconcileTenantWorkflow(ctx workflow.Context, in ReconcileInput) (*ReconcileResult, error) {
 	logger := workflow.GetLogger(ctx)
 	logger.Info("reconcile workflow started", "tenantID", in.TenantID)
@@ -92,8 +107,33 @@ func ReconcileTenantWorkflow(ctx workflow.Context, in ReconcileInput) (*Reconcil
 		return nil, err
 	}
 
-	// Repair. One database action covers every database/role/ownership drift
-	// kind; a missing backup is a second, independent repair.
+	// Repair — with the missing-database data-safety rule FIRST. A missing
+	// database is potential data loss, so restore from the latest verified
+	// backup before touching anything else; escalate to the DLQ (non-retryable
+	// — retrying will not manufacture a backup) when there is no verified
+	// backup. We NEVER fall through to EnsureTenantDatabase's create-empty
+	// path for a missing database: that would look like convergence while
+	// silently destroying the tenant's data.
+	if slices.Contains(drifts, model.DriftMissingDatabase) {
+		err := workflow.ExecuteActivity(actCtx, activities.RestoreTenantFromBackupActivityName,
+			in.TenantID).Get(actCtx, nil)
+		if activities.IsNoVerifiedBackup(err) {
+			reason := fmt.Sprintf("tenant %s database is missing and no verified backup exists; "+
+				"refusing to synthesize an empty replacement (data unrecoverable) — restore or delete manually",
+				in.TenantID)
+			_ = workflow.ExecuteActivity(actCtx, activities.MarkReconcileUnrecoverableActivityName,
+				in.TenantID, reason).Get(actCtx, nil)
+			return &ReconcileResult{TenantID: in.TenantID, Converged: false, Drifts: drifts},
+				temporal.NewNonRetryableApplicationError(reason, "ReconcileUnrecoverable", err)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	// The remaining database/role/ownership/connect drifts are shape-only and
+	// safe to auto-repair. EnsureTenantDatabase is idempotent and re-applies
+	// ownership after a data restore, so running it after a restore is
+	// harmless (and repairs any drift the dump's statements introduced).
 	if needsDatabaseRepair(drifts) {
 		if err := workflow.ExecuteActivity(actCtx, activities.EnsureTenantDatabaseActivityName,
 			in.TenantID).Get(actCtx, nil); err != nil {

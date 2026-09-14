@@ -8,21 +8,42 @@ import (
 )
 
 // stubCloudProvider implements cloud.CloudProvider with every method failing
-// loudly except InspectDatabase, which the test controls. BackupTenantData's
-// probe path only needs the read primitive, so a panicking dummy proves the
-// skip happens BEFORE any snapshot/restore work — and that a missing database
-// never reaches the creation/verification machinery.
+// loudly except InspectDatabase, which the test controls, and the four
+// primitives the reconcile-restore path needs, which are recorded instead of
+// executed (CreateDatabase, RestoreDatabaseFromBackup, EnsureDatabaseOwnership,
+// ValidateDatabase). Recording (rather than panicking) lets a test ASSERT that
+// a create/restore/validate happened — or, with empty slices, that none did.
 type stubCloudProvider struct {
 	state cloud.DatabaseState
 	err   error
+
+	createdDatabases  []string
+	restoredTargets   []string
+	restoredFilenames []string
+	ownershipRepairs  int
+	validated         int
 }
 
 func (s *stubCloudProvider) InspectDatabase(ctx context.Context, dbName string) (cloud.DatabaseState, error) {
 	return s.state, s.err
 }
 
-func (s *stubCloudProvider) CreateDatabase(context.Context, string) error {
-	panic("unexpected CreateDatabase")
+func (s *stubCloudProvider) CreateDatabase(ctx context.Context, tenantID string) error {
+	s.createdDatabases = append(s.createdDatabases, tenantID)
+	return nil
+}
+func (s *stubCloudProvider) RestoreDatabaseFromBackup(ctx context.Context, targetDB, backupName string) error {
+	s.restoredTargets = append(s.restoredTargets, targetDB)
+	s.restoredFilenames = append(s.restoredFilenames, backupName)
+	return nil
+}
+func (s *stubCloudProvider) ValidateDatabase(ctx context.Context, dbName string) error {
+	s.validated++
+	return nil
+}
+func (s *stubCloudProvider) EnsureDatabaseOwnership(ctx context.Context, dbName string) error {
+	s.ownershipRepairs++
+	return nil
 }
 func (s *stubCloudProvider) DropDatabase(context.Context, string) error {
 	panic("unexpected DropDatabase")
@@ -39,20 +60,11 @@ func (s *stubCloudProvider) DropDatabaseNamed(context.Context, string) error {
 func (s *stubCloudProvider) SnapshotDatabase(context.Context, string) (string, error) {
 	panic("unexpected SnapshotDatabase")
 }
-func (s *stubCloudProvider) RestoreDatabaseFromBackup(context.Context, string, string) error {
-	panic("unexpected RestoreDatabaseFromBackup")
-}
-func (s *stubCloudProvider) ValidateDatabase(context.Context, string) error {
-	panic("unexpected ValidateDatabase")
-}
 func (s *stubCloudProvider) RenameDatabase(context.Context, string, string) error {
 	panic("unexpected RenameDatabase")
 }
 func (s *stubCloudProvider) RoleExists(context.Context, string) (bool, error) {
 	panic("unexpected RoleExists")
-}
-func (s *stubCloudProvider) EnsureDatabaseOwnership(context.Context, string) error {
-	panic("unexpected EnsureDatabaseOwnership")
 }
 func (s *stubCloudProvider) EnsureRole(context.Context, string) error { panic("unexpected EnsureRole") }
 

@@ -713,11 +713,19 @@ Next.js app in `web/`:
 
 ### Phase 12 — Portfolio ship
 
-- [ ] README rewrite: 60-second story (`What? Why? How? Demo?`), architecture diagram, demo GIF slot
-- [ ] Load test: 100 tenants end-to-end; publish only real, measured p50/p95/p99 + failure rate
-- [ ] Demo video 60–120s: happy path → chaos failure → saga → DLQ retry → reconcile repair
+- [x] README rewrite: 60-second story (`What? Why? How? Demo?`), architecture diagram, demo GIF slot
+- [x] Load test: 100 tenants end-to-end; publish only real, measured p50/p95/p99 + failure rate
+- [x] Demo video 60–120s: happy path → chaos failure → saga → DLQ retry → reconcile repair
 - [ ] Live showcase **$0**: docs site (Vercel/Netlify) + live tunnel (Tailscale Funnel / Cloudflare) or Oracle Always Free
 - [ ] Blog posts from the Showable Artifacts draft list
+
+### Phase 13 — Review hardening (Sept 2026 external web review → 9.3/10)
+
+- [x] P0: Reconciliation data safety — missing DB restores from the latest verified backup; without one, escalate to DLQ (never silently recreate an empty DB)
+- [x] ADR-0008: Temporal worker deployment compatibility (activity registration, rollout, replay)
+- [x] Reconciler scope documented as database-infrastructure + backup policy (not tenant identity/applications)
+- [x] Load-test evidence: add resource metrics (db CPU/connections, Temporal task latency, worker/keycloak load, docker resource count)
+- [x] CAS concurrency: explicit conflict tests (DELETE×UPGRADE, DELETE×BACKUP, MIGRATE×BACKUP, RECONCILE×MIGRATE, RECONCILE×DELETE)
 
 ---
 
@@ -885,6 +893,16 @@ Next.js app in `web/`:
 | 12.3| Demo video (60–120s: happy path + failure + DLQ + reconcile)| ☑ |
 | 12.4| Live showcase ($0: docs site + Tailscale/Cloudflare tunnel or Oracle free VM) | ☐ |
 | 12.5| Blog posts (draft list in Showable Artifacts)               | ☐ |
+
+### Phase 13 — Review hardening
+
+| #   | Task                                                       | Status |
+| --- | ---------------------------------------------------------- | ------ |
+| 13.1| P0: reconciliation data safety — missing DB → restore from latest verified backup, else escalate to DLQ; never silently recreate an empty DB | ☑ |
+| 13.2| ADR-0008 (Temporal worker deployment compatibility) + reconciler scope note (database-infra + backup policy) | ☑ |
+| 13.3| Load-test report: resource metrics (db CPU/connections, Temporal task latency, worker/Keycloak CPU+RSS, docker resource count) | ☑ |
+| 13.4| CAS concurrency: explicit conflict tests (repo unit + live) — one op wins, other 409s, no corruption | ☑ |
+| 13.5| Final case-study doc (architecture + engineering narrative) | ☐ |
 
 ---
 

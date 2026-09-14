@@ -181,6 +181,24 @@ rollback. That changes its failure contract: a mid-run crash must fail the
 run and must NOT audit `MarkReconcileFailed` (reserved for the
 detected-unconverged branch).
 
+**Dashboard data-safety rule (missing database).** An active dedicated tenant's
+database once existed, so a missing database is potential data loss. The
+repair path therefore restores it from the latest **verified** (completed)
+backup; when no verified backup exists it escalates with a non-retryable
+`NoVerifiedBackup` error (straight to the DLQ) and audits
+`TENANT_RECONCILE_UNRECOVERABLE`. It never silently recreates an empty
+database and calls the tenant converged — that would destroy the tenant's
+data and the operator's ability to notice. Live-proven (Phase 13.1):
+external `DROP DATABASE` on a backed-up tenant converged with the marker data
+restored and `TENANT_RECONCILE_RESTORED` audited; the same drop on an
+unbacked-up tenant left the database absent and the run in the DLQ
+(`retryable: false`).
+
+Also documented in `internal/workflow/reconcile.go`: the reconciler's scope is
+**database infrastructure + backup policy** (database exists + isolation
+shape + owner role + completed backup), not tenant identity or application
+data.
+
 Coverage is now full and position-exact:
 
 - **Fast path** (already-converged): in the fail-every-activity matrix as
@@ -188,16 +206,29 @@ Coverage is now full and position-exact:
   MarkReconcileConverged` each failing, any order.
 - **Repair path** (drift → repair → re-probe → converge):
   `TestReconcileRepairPathActivityFailures` drives the branchy sequence
-  `Resolve → Probe → RecordReconcileDrift → EnsureTenantDatabase →
-  BackupTenantData → re-Probe (clean) → MarkReconcileConverged` as a
-  fail-every-activity loop with exact composition assertions: drift logging
-  runs only from position 2, ensure only from 3, backup only from 4, converged
-  only when it is itself the failure, `MarkReconcileFailed` **never** on a
-  mid-run crash. Failing mocks are persistent across retry attempts, so the
-  assertions hold under the workflow's `MaximumAttempts: 3` policy.
-- Scenarios: `ConvergedWhenNoDrift`, `RepairsDriftAndConverges`,
+  `Resolve → Probe → RecordReconcileDrift → RestoreTenantFromBackup →
+  EnsureTenantDatabase → BackupTenantData → re-Probe (clean) →
+  MarkReconcileConverged` as a fail-every-activity loop with exact
+  composition assertions: drift logging runs only from position 2, restore
+  only from 3, ensure only from 4, backup only from 5, converged only when it
+  is itself the failure, `MarkReconcileFailed` **never** on a mid-run crash.
+  Failing mocks are persistent across retry attempts, so the assertions hold
+  under the workflow's `MaximumAttempts: 3` policy. A *generic* restore error
+  (e.g. backup-listing probe down) is retryable; the no-verified-backup
+  escalation is the one non-retryable exit.
+- Scenarios: `ConvergedWhenNoDrift`,
+  `MissingDatabaseRestoresFromBackupAndConverges` (missing DB + verified
+  backup → restore → converge),
+  `MissingDatabaseWithoutBackupEscalates` (missing DB + no backup →
+  `TENANT_RECONCILE_UNRECOVERABLE`, **Ensures the create-empty repair is
+  never reached**, run fails non-retryable → DLQ),
+  `MissingBackupOnlyRepairs` (healthy DB, capture backup, converge),
   `UnconvergedAfterRepairFails` (the only legitimate `MarkReconcileFailed`
   path), `SkipsNonActiveTenant`, `SharedTenantConvergesWithoutProbe`.
+- Activity-level: `RestoreTenantFromBackup` happy path (newest-first list
+  skips failed/pending rows, recreates DB, restores, re-applies ownership,
+  validates, audits `TENANT_RECONCILE_RESTORED`), no-verified-backup
+  sentinel (and no database created), list-error propagation.
 
 ---
 
@@ -207,6 +238,7 @@ Coverage is now full and position-exact:
 |---|---|---|
 | Duplicate `POST /api/v1/tenants` | 409 conflict, no second workflow | `CreateTenatConflict` (handler) |
 | Duplicate reconcile while in flight | 409, no duplicate workflow | `ReconcileTenantAlreadyInFlight` (handler) |
+| Concurrent lifecycle ops on one tenant (DELETE×UPGRADE, DELETE×BACKUP, MIGRATE×BACKUP, RECONCILE×MIGRATE, RECONCILE×DELETE) | Exactly one CAS write commits; the loser 409s or records a failed run — tenant settles in a legal state, no corruption | `TestUpdateTenantStatusFromConcurrentRace`, `TestUpdateTenantStatusFromSecondDeleteLoses` (repository, integration) + live pair validation (Phase 13.4) |
 | Same run executing many activities → recorder dedupe | Only one `workflow_instances` row per run | `TestRecorder_RunningIsIdempotent` |
 | Run fails after several activities | Row transitions running → failed with the error message | `TestRecorder_RunningThenFailed` |
 | Recorder's repo is down | Failure is logged and swallowed — never breaks the workflow | `TestRecorder_BestEffortOnRepoError` |

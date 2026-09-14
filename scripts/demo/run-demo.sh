@@ -9,6 +9,7 @@
 #   2. Failure:     a delete whose terminal CAS is sabotaged -> DLQ
 #   3. Replay:      /retry converges the torn-down world back to active
 #   4. Reconcile:   external drift (PUBLIC CONNECT) -> detected -> repaired
+#   5. Data safety: external DROP DATABASE -> reconcile restores from backup;
 #
 # Requirements: curl, jq, docker (stack from make dev-up running).
 # Usage:        sh scripts/demo/run-demo.sh [--cleanup]
@@ -51,6 +52,9 @@ SUFFIX="$(date +%H%M%S)"
 GOOD="demo-good-$SUFFIX"
 FAIL="demo-fail-$SUFFIX"
 RCON="demo-recon-$SUFFIX"
+DSF="demo-safe-$SUFFIX"
+DDB="tenant_$DSF"
+MARKER="alive"
 
 # ============================================================================
 say "Beat 1 — happy path: provision $GOOD (dedicated)"
@@ -128,10 +132,62 @@ else
   echo "NOT converged!" >&2; exit 1
 fi
 
+# ============================================================================
+say "Beat 5 — data safety: external DROP DATABASE restored from backup"
+# ============================================================================
+curl -fsS -X POST "$BASE/api/v1/tenants" "${AUTH[@]}" \
+  -d "{\"tenantID\":\"$DSF\",\"isolationMode\":\"dedicated\"}" >/dev/null
+wait_status "$DSF" active
+# Seed a marker row so we can tell "restored from backup" from "empty recreate".
+docker exec tenantflow-postgres psql -U "$PG_USER" -d "$DDB" -qc \
+  "CREATE TABLE marker(k text PRIMARY KEY); INSERT INTO marker VALUES ('$MARKER');"
+ok "$DSF provisioned with marker row in tenant_$DSF"
+
+# Reconcile #1: the tenant has no completed backup yet, so the reconciler
+# captures one (missing_backup repair). Poll until the backup row is completed.
+curl -fsS -X POST "$BASE/api/v1/tenants/$DSF/reconcile" "${AUTH[@]}" | jq -c .
+BACKUP=0
+for _ in $(seq 1 60); do
+  BACKUP="$(docker exec tenantflow-postgres psql -U "$PG_USER" -d tenantflow -tAc \
+    "SELECT count(*) FROM backups WHERE tenant_id='$DSF' AND status='completed'" | tr -cd 0-9)"
+  [ "${BACKUP:-0}" -ge 1 ] && break
+  sleep 0.5
+done
+[ "${BACKUP:-0}" -ge 1 ] || { echo "backup not captured" >&2; exit 1; }
+ok "reconciler captured completed backup ($BACKUP)"
+# Wait for reconcile #1 to FULLY converge (its re-probe lags the backup row a
+# moment), otherwise the immediate reconcile #2 below would 409 as in-flight.
+for _ in $(seq 1 60); do
+  CONV="$(curl -sS "$BASE/api/v1/tenants/$DSF/events" "${AUTH[@]}" | grep -c TENANT_RECONCILE_CONVERGED || true)"
+  [ "${CONV:-0}" -ge 1 ] && break
+  sleep 0.5
+done
+[ "${CONV:-0}" -ge 1 ] || { echo "reconcile #1 never converged" >&2; exit 1; }
+ok "reconcile #1 converged (backup captured)"
+
+# External disaster: someone DROPs the whole database out-of-band.
+docker exec tenantflow-postgres psql -U "$PG_USER" -d postgres -qc \
+  "DROP DATABASE \"$DDB\" WITH (FORCE);"
+ok "external DROP DATABASE $DDB (data gone)"
+
+# Reconcile #2: database missing + verified backup exists -> restore from it.
+curl -fsS -X POST "$BASE/api/v1/tenants/$DSF/reconcile" "${AUTH[@]}" | jq -c .
+VALUE=""
+for _ in $(seq 1 120); do
+  VALUE="$(docker exec tenantflow-postgres psql -U "$PG_USER" -d "$DDB" -tAc \
+    "SELECT k FROM marker LIMIT 1" 2>/dev/null || true)"
+  [ "$VALUE" = "$MARKER" ] && break
+  sleep 0.5
+done
+[ "$VALUE" = "$MARKER" ] || { echo "marker NOT restored!" >&2; exit 1; }
+echo "  restored marker: $VALUE"
+curl -fsS "$BASE/api/v1/tenants/$DSF/events" "${AUTH[@]}" | jq -c \
+  --arg t "$DSF" '.events[] | select(.EventType|test("TENANT_DRIFT_DETECTED|TENANT_RECONCILE_RESTORED|TENANT_RECONCILE_CONVERGED")) | {type: .EventType, payload: .Payload}'
+
 say "Demo beats complete"
 if [ "$CLEANUP" = "--cleanup" ]; then
-  for t in "$GOOD" "$FAIL" "$RCON"; do
+  for t in "$GOOD" "$FAIL" "$RCON" "$DSF"; do
     curl -fsS -X DELETE "$BASE/api/v1/tenants/$t" "${AUTH[@]}" >/dev/null || true
   done
-  echo "  cleaned up $GOOD $FAIL $RCON (soft-deleted)"
+  echo "  cleaned up $GOOD $FAIL $RCON $DSF (soft-deleted)"
 fi
