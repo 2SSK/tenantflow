@@ -902,7 +902,7 @@ Next.js app in `web/`:
 | 13.2| ADR-0008 (Temporal worker deployment compatibility) + reconciler scope note (database-infra + backup policy) | ☑ |
 | 13.3| Load-test report: resource metrics (db CPU/connections, Temporal task latency, worker/Keycloak CPU+RSS, docker resource count) | ☑ |
 | 13.4| CAS concurrency: explicit conflict tests (repo unit + live) — one op wins, other 409s, no corruption | ☑ |
-| 13.5| Final case-study doc (architecture + engineering narrative) | ☐ |
+| 13.5| Final case-study doc (architecture + engineering narrative) | ☑ |
 
 ---
 
