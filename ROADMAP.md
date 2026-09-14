@@ -756,7 +756,7 @@ Next.js app in `web/`:
 | 1.5 | Roles + test users seeded                         | ☑      |
 | 1.6 | API protected; `/status` public                   | ☑      |
 | 1.7 | curl tests: 200 / 401 / 403 pass                  | ☑      |
-| 1.8 | OIDC flow written down from memory                | ☐      |
+| 1.8 | OIDC flow written down from memory — `docs/oidc-flow.md` | ☑      |
 
 ### Phase 2 — Data model
 
@@ -799,11 +799,13 @@ Next.js app in `web/`:
 | 5.2 | Keycloak login (Auth.js) | ☑      |
 | 5.3 | Tenants list             | ☑      |
 | 5.4 | Create tenant form       | ☑      |
-| 5.5 | Live progress (SSE)      | ☐      |
+| 5.5 | Live progress (SSE)      | ☑      |
+| 5.5b| (decision) Polling is the supported path (audit timeline polls events; polling proven at 1000-tenant load scale). SSE recorded as a POST-SHIP candidate only, not pre-ship scope — matches review's no-new-features steer. | ☑ |
 | 5.6 | Audit timeline           | ☑      |
 | 5.7 | Role-aware UI            | ☑      |
 | 5.8 | Users page (list/delete) | ☑      |
-| 5.9 | User create form         | ☐      |
+| 5.9 | User create form         | ☑      |
+| 5.9b| (decision) No create form in dashboard: Keycloak admin console owns identity lifecycle (creation, temp passwords, verification); dashboard surfaces operational mgmt (list/roles/delete) only. Matches review's no-new-features steer. | ☑ |
 | 5.10| Tenant delete button     | ☑      |
 | 5.11| shadcn/ui + tokyonight   | ☑      |
 | 5.12| Dark/light mode toggle   | ☑      |
