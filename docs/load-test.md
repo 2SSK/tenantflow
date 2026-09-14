@@ -189,6 +189,109 @@ Interpretation:
   identities checked in the loadtest teardown, 0 errors). These runs, like
   their predecessors, ended clean.
 
+## Phase 15.5 addendum — scale ramp 100 → 500 → 1000 (dedicated)
+
+Measured 2026-09-14 on the Phase-15 commit, after the external review asked
+"how far can the control plane scale?". Recipe: `cmd/loadtest` with
+`-mode dedicated -c 10 -delete -timeout 5m`, n ∈ {100, 500, 1000}, unique
+per-scale prefixes (`lt2x100`, `lt2x500`, `lt2x1000`). Concurrency is held
+constant at 10 so the wall/throughput trend isolates *volume*, not constant
+hydra-style concurrency.
+
+Two deliberate deviations, disclosed:
+
+- The Phase 14 scheduled reconciler (`reconcile-sweep`) was **paused for the
+  measurement window** so its per-tick reconcile children could not be
+  attributed to the ramp: the running workflow was terminated and the worker
+  restarted with `TENANTFLOW_RECONCILE_SWEEP_INTERVAL=0s`. It was re-enabled
+  (10m schedule, worker restart, fresh sweep instance) immediately after the
+  last scale. No other component was touched.
+- `cmd/loadtest` polls now send the bearer token on every tenant GET, because
+  Phase 15.4 made read routes authenticated. This ramp therefore exercised
+  the security-hardened API end-to-end. The sampler used for the resource
+  table is committed at `scripts/loadtest-metrics.sh` (docker stats snapshot +
+  1s `/proc` delta for the host processes + `pg_stat_activity` count, ~4s
+  cadence).
+
+### Client-visible latency (loadtest clock)
+
+| Scale | Phase | Result | Wall | Throughput | Latency (s) |
+|---|---|---|---|---|---|
+| 100 | provision → active | 100/100, 0 err | 17.7s | 338.9/min | p50 1.67, p95 2.08, p99 2.48, mean 1.73 (1.26–2.69) |
+| 100 | delete → deleted | 100/100, 0 err | 1m22.0s | 73.1/min | p50 6.92, p95 19.81, p99 19.87, mean 8.19 (6.10–19.88) |
+| 500 | provision → active | 500/500, 0 err | 1m40.5s | 298.6/min | p50 2.05, p95 2.46, p99 2.53, mean 2.00 (1.44–2.87) |
+| 500 | delete → deleted | 500/500, 0 err | 6m0.5s | 83.2/min | p50 7.12, p95 8.14, p99 9.56, mean 7.20 (6.32–9.61) |
+| 1000 | provision → active | 1000/1000, 0 err | 3m20.6s | 299.1/min | p50 1.91, p95 2.48, p99 3.30, mean 2.00 (1.44–4.64) |
+| 1000 | delete → deleted | 1000/1000, 0 err | 11m42.0s | 85.5/min | p50 6.93, p95 7.75, p99 8.15, mean 7.02 (6.13–8.74) |
+
+### Temporal-server-side task duration
+
+Same `executions_visibility` source as the Phase 13.3 addendum, filtered to the
+per-scale prefixes (status=2 completed; rows = the scale size, every scale
+100%).
+
+| Scale | Workflow | p50 | p95 | p99 | max |
+|---|---|---|---|---|---|
+| 100 | ProvisionTenantWorkflow | 1.69 | 2.07 | 2.65 | 2.67 |
+| 100 | DeleteTenantWorkflow | 6.92 | 19.70 | 19.79 | 19.82 |
+| 500 | ProvisionTenantWorkflow | 1.99 | 2.42 | 2.59 | 2.83 |
+| 500 | DeleteTenantWorkflow | 7.07 | 8.14 | 9.46 | 9.64 |
+| 1000 | ProvisionTenantWorkflow | 1.97 | 2.47 | 3.28 | 4.59 |
+| 1000 | DeleteTenantWorkflow | 6.94 | 7.74 | 8.07 | 8.69 |
+
+Server-side durations still track the client clock within ~0.1s at every
+percentile — the queue tax stays milliseconds even at 1000 tenants.
+
+### Resource metrics (sampled during each scale)
+
+| Metric | n=100 | n=500 | n=1000 |
+|---|---|---|---|
+| postgres CPU mean / max | 300% / 598% | 330% / 548% | 318% / 568% |
+| postgres mem max | 348 MiB | 393 MiB | 414 MiB |
+| temporal CPU mean / max | 29% / 104% | 35% / 128% | 34% / 139% |
+| temporal mem max | 194 MiB | 278 MiB | 385 MiB |
+| keycloak CPU mean / max | 26% / 129% | 20% / 158% | 12% / 103% |
+| keycloak mem max | 734 MiB | 779 MiB | 797 MiB |
+| postgres connections mean / max | 57 / 66 | 61 / 70 | 53 / 70 |
+| worker CPU max / RSS | 22% / 61 MiB | 28% / 65 MiB | 24% / 68 MiB |
+| api CPU max / RSS | 21% / 52 MiB | 11% / 55 MiB | 19% / 55 MiB |
+
+### Cleanliness at scale
+
+| Scale | DBs leftover | Roles leftover | KC users leftover | DLQ rows attributed |
+|---|---|---|---|---|
+| 100 | 0 | 0 | 0 | 0 |
+| 500 | 0 | 0 | 0 | 0 |
+| 1000 | 0 | 0 | 0 | 0 |
+
+Final cross-prefix audit after the last scale (all three prefixes at once):
+**0 databases, 0 roles, 0 Keycloak users, 0 DLQ rows**. No failed run was
+recorded under load at any scale — the retry/DLQ machinery never had to
+engage, and nothing was dropped.
+
+### How far can the control plane scale? (Phase 15.5 conclusion)
+
+- **Provision throughput is flat: ~299–339 tenants/min from 100 through
+  1000.** Ten c=10 ramps of 100, 500, and 1000 all sustain the same rate; the
+  bottleneck (per-tenant Keycloak identity + dedicated role creation, per the
+  Phase 13.3 data) runs at a constant ~5/s. There is no throughput cliff up
+  to 1000 tenants.
+- **Latency is flat.** Provision p95 stays 2.1–2.5s; delete p95 drops from
+  19.8s (n=100, cold-start stragglers, the same pg_dump queueing the 13.3
+  addendum already identified as contention rather than a cliff) to a ~7.7–8.1s
+  plateau at 500/1000. Amortized warm systems behave better, not worse.
+- **The data plane dominates; the control plane is a rounding error.** At
+  every scale postgres pulls ~3 cores mean / 5.5–6 cores peak (pg_dump +
+  restore ownership), while the Go worker peaks at 28% CPU / 68 MiB RSS and
+  the API at 21% / 55 MiB. pg_connections plateau at ~53–61 mean (≤70 max)
+  against `max_connections=100` — the pool absorbs the whole ramp.
+- **Conclusion:** measured to 1000 tenants through the full lifecycle with
+  zero data loss signals (0 DLQ), zero leaks (0/0/0), and a flat per-tenant
+  cost. The measured upper bound is **not below 1000**; the next limit is
+  postgres core capacity on this single-dev-machine stack, not connections,
+  not memory, and not control-plane CPU. Scaling out means adding database
+  capacity, not re-architecting the orchestration.
+
 ## Scope
 
 - Workload: this report measures HTTP-visible tenant lifecycle behavior

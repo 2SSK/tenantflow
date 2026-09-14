@@ -84,7 +84,7 @@ func main() {
 				results[i] = run
 				return
 			}
-			status, err := pollTenant(client, *url, id, *timeout, "active")
+			status, err := pollTenant(client, *url, id, auth, *timeout, "active")
 			run.provision = time.Since(t0)
 			run.provisionOK = err == nil && status == "active"
 			if err != nil {
@@ -128,7 +128,7 @@ func main() {
 					run.err = fmt.Sprintf("delete POST: status %d", resp.StatusCode)
 					return
 				}
-				status, err := pollTenant(client, *url, run.tenantID, *timeout, "deleted")
+				status, err := pollTenant(client, *url, run.tenantID, auth, *timeout, "deleted")
 				run.deletion = time.Since(t0)
 				run.deletionOK = err == nil && status == "deleted"
 				if err != nil {
@@ -231,10 +231,18 @@ func postJSON(client *http.Client, apiURL, auth string, payload, out interface{}
 // "deleted". Treating "active" as universal terminal made the delete phase
 // return instantly (the tenant is still active during its grace period) and
 // report every deletion as failed before the workflow even started.
-func pollTenant(client *http.Client, apiURL, id string, timeout time.Duration, want string) (string, error) {
+//
+// auth is the same bearer token used for every other API call: tenant reads
+// are authenticated (Phase 15.4), so the poll must send it too.
+func pollTenant(client *http.Client, apiURL, id, auth string, timeout time.Duration, want string) (string, error) {
 	deadline := time.Now().Add(timeout)
 	for {
-		resp, err := client.Get(apiURL + "/api/v1/tenants/" + id)
+		req, err := http.NewRequest(http.MethodGet, apiURL+"/api/v1/tenants/"+id, nil)
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("Authorization", auth)
+		resp, err := client.Do(req)
 		if err != nil {
 			return "", err
 		}
