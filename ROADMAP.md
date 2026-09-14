@@ -752,7 +752,7 @@ Next.js app in `web/`:
 | 1.1 | Clerk → OIDC middleware swap                      | ☑      |
 | 1.2 | `internal/auth` provider + verifier + RequireRole | ☑      |
 | 1.3 | Keycloak config added                             | ☑      |
-| 1.4 | Clerk deps removed; gocloak admin client wired    | ☐      |
+| 1.4 | Clerk deps removed; admin client wired (raw HTTP)  | ☑      |
 | 1.5 | Roles + test users seeded                         | ☑      |
 | 1.6 | API protected; `/status` public                   | ☑      |
 | 1.7 | curl tests: 200 / 401 / 403 pass                  | ☑      |
@@ -804,7 +804,7 @@ Next.js app in `web/`:
 | 5.7 | Role-aware UI            | ☑      |
 | 5.8 | Users page (list/delete) | ☑      |
 | 5.9 | User create form         | ☐      |
-| 5.10| Tenant delete button     | ☐      |
+| 5.10| Tenant delete button     | ☑      |
 | 5.11| shadcn/ui + tokyonight   | ☑      |
 | 5.12| Dark/light mode toggle   | ☑      |
 | 5.13| JetBrains Mono + Inter   | ☑      |
@@ -846,9 +846,9 @@ Next.js app in `web/`:
 | 9.1 | Prometheus metrics (API + worker) + Grafana dashboard | ☑ |
 | 9.2 | Per-tenant cost view (stretch)   | ☑ |
 | 9.3 | README + screenshots             | ☑ |
-| 9.4 | Demo video                       | ☐      |
-| 9.5 | Blog posts                       | ☐      |
-| 9.6 | Live deployment + portfolio link | ☐      |
+| 9.4 | Demo video                       | ☑      |
+| 9.5 | Blog posts                       | ☑      |
+| 9.6 | Live deployment + portfolio link | ☑      |
 
 ### Phase 10 — Reconciliation (desired vs actual state)
 
@@ -891,8 +891,8 @@ Next.js app in `web/`:
 | 12.1| README rewrite: 60-second story, architecture diagram, demo | ☑ story-first README; ASCII architecture; reliability docs surfaced; quick start via make; API table; real screenshots |
 | 12.2| Load test: 100 tenants, publish only real measured numbers  | ☑ |
 | 12.3| Demo video (60–120s: happy path + failure + DLQ + reconcile)| ☑ |
-| 12.4| Live showcase ($0: docs site + Tailscale/Cloudflare tunnel or Oracle free VM) | ☐ |
-| 12.5| Blog posts (draft list in Showable Artifacts)               | ☐ |
+| 12.4| Live showcase ($0: docs site + Tailscale/Cloudflare tunnel or Oracle free VM) | ☑ |
+| 12.5| Blog posts (draft list in Showable Artifacts)               | ☑ |
 
 ### Phase 13 — Review hardening
 
