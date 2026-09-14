@@ -26,12 +26,11 @@ export default function UsersPage() {
   const isAdmin = session?.user?.realmRoles?.includes("platform-admin");
 
   const fetchUsers = async () => {
-    setLoading(true);
-    setError(null);
     try {
       const res = await fetch("/api/users");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      setError(null); // clear any stale banner once the fetch succeeds
       setUsers(data.users ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load users");
@@ -40,8 +39,33 @@ export default function UsersPage() {
     }
   };
 
+  // Initial load once the session reports admin. State updates happen inside
+  // .then callbacks (the "external system subscription" pattern the rule
+  // endorses); a `cancelled` flag keeps late responses from writing to an
+  // unmounted page.
   useEffect(() => {
-    if (isAdmin) fetchUsers();
+    if (!isAdmin) return;
+    let cancelled = false;
+    fetch("/api/users")
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = (await res.json()) as { users?: KcUser[] };
+        if (!cancelled) {
+          setError(null); // clear any stale banner once the fetch succeeds
+          setUsers(data.users ?? []);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Failed to load users");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [isAdmin]);
 
   const handleDelete = async (userID: string, username: string) => {

@@ -16,7 +16,7 @@ export async function DELETE(
   try {
     await deleteUser(userID);
     return NextResponse.json({ success: true });
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { error: "Failed to delete user" },
       { status: 502 },

@@ -27,12 +27,11 @@ export default function FailedRunsPage() {
   const isAdmin = session?.user?.realmRoles?.includes("platform-admin");
 
   const fetchRuns = async () => {
-    setLoading(true);
-    setError(null);
     try {
       const res = await fetch("/api/failed-runs");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      setError(null); // clear any stale banner once the fetch succeeds
       setRuns(data.runs ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load failed runs");
@@ -41,8 +40,33 @@ export default function FailedRunsPage() {
     }
   };
 
+  // Initial load once on mount. State updates happen inside .then callbacks
+  // (the "external system subscription" pattern the rule endorses); a
+  // `cancelled` flag keeps late responses from writing to an unmounted page.
   useEffect(() => {
-    fetchRuns();
+    let cancelled = false;
+    fetch("/api/failed-runs")
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = (await res.json()) as { runs?: FailedRun[] };
+        if (!cancelled) {
+          setError(null); // clear any stale banner once the fetch succeeds
+          setRuns(data.runs ?? []);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setError(
+            err instanceof Error ? err.message : "Failed to load failed runs",
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleRetry = async (run: FailedRun) => {

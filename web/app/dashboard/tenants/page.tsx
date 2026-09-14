@@ -6,7 +6,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { TENANT_STATUS_CONFIG, type Tenant } from "@/lib/types";
 import { Plus, Loader2, Server } from "lucide-react";
@@ -23,12 +23,11 @@ export default function TenantsPage() {
   const isAdmin = session?.user?.realmRoles?.includes("platform-admin");
 
   const fetchTenants = async () => {
-    setLoading(true);
-    setError(null);
     try {
       const res = await fetch("/api/tenants");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      setError(null); // clear any stale banner once the fetch succeeds
       setTenants(data.tenants ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load tenants");
@@ -37,8 +36,31 @@ export default function TenantsPage() {
     }
   };
 
+  // Initial load once on mount. State updates happen inside .then callbacks
+  // (the "external system subscription" pattern the rule endorses); a
+  // `cancelled` flag keeps late responses from writing to an unmounted page.
   useEffect(() => {
-    fetchTenants();
+    let cancelled = false;
+    fetch("/api/tenants")
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = (await res.json()) as { tenants?: Tenant[] };
+        if (!cancelled) {
+          setError(null); // clear any stale banner once the fetch succeeds
+          setTenants(data.tenants ?? []);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Failed to load tenants");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleCreate = async (e: React.FormEvent) => {

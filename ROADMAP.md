@@ -931,7 +931,7 @@ Next.js app in `web/`:
 | 15.4| P1 — security: authenticated reads. Only `GET /status` stays public; all tenant/list/event/backup/cost reads require a Keycloak bearer token (reader role gate where sensible); mutations keep `platform-admin`. Update router, middleware, handler tests, web token flow, docs | ☑ |
 | 15.5| P2 — resource-aware benchmarks: extend load test from 100 → 500 → 1000 tenants, capturing Postgres CPU/connections, Temporal task latency, worker CPU/RSS, Keycloak latency, docker resource counts; record "how far can the control plane scale" in `docs/load-test.md` | ☑ |
 | 15.6| README refresh: remove "read-only routes need no auth" claim, add "What this project proves" section (durable orchestration, idempotency, Saga, failure recovery, reconciliation, isolation, chaos, operational recovery) | ☑ |
-| 15.7| Dependency hygiene: resolve the 10 open Dependabot PRs (Temporal SDK/API, pgx, go-oidc, prometheus-common, Next.js, TS, React types) — merge only after gates green on this branch | ☐ |
+| 15.7| Dependency hygiene: resolve the 10 open Dependabot PRs — Go deps (Temporal SDK/API, pgx, go-oidc, prometheus-common) all accepted; frontend deps: next, react, eslint-config-next accepted; typescript 7 rejected (typescript-eslint does not support TS 7.0 — upstream tracking issue typescript-eslint#10940); @types/node 26 rejected (runtime is Node 22; @types/node@26 declares APIs absent from the runtime).   | ☑ |
 
 > Phase 15 completion feeds 12.4 (live showcase) and 12.5 (blog posts) — the
 > review's final recommendation is a case-study-first demo, not another

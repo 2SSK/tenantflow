@@ -8,6 +8,7 @@ export async function GET(
   { params }: { params: Promise<{ userID: string }> },
 ) {
   const { userID } = await params;
+  void userID; // path segment is validated by routing; GET returns all assignable roles
   const session = await auth();
   if (!session?.user?.realmRoles?.includes("platform-admin")) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });

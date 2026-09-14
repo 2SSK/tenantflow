@@ -20,7 +20,7 @@ export async function GET() {
       }>;
     }>("/api/v1/tenants", session.user.accessToken);
     return NextResponse.json(data);
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { error: "Failed to fetch tenants" },
       { status: 502 },
@@ -45,7 +45,7 @@ export async function POST(request: Request) {
       body: JSON.stringify(body),
     });
     return NextResponse.json(data, { status: 202 });
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { error: "Failed to create tenant" },
       { status: 502 },

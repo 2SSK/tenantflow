@@ -15,7 +15,7 @@ export default function DashboardPage() {
           Welcome{user?.name ? `, ${user.name}` : ""}
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Here's what's happening with your tenants.
+          Here&apos;s what&apos;s happening with your tenants.
         </p>
       </div>
 

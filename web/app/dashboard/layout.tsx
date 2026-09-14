@@ -35,6 +35,10 @@ function ThemeToggle({ collapsed }: { collapsed: boolean }) {
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
 
+  // One-shot post-hydration flag: the theme icon must not render with the
+  // wrong theme during SSR. The single follow-up render is intentional, so
+  // the cascade warning does not apply here.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => setMounted(true), []);
 
   if (!mounted) return null;
