@@ -103,6 +103,7 @@ type fakeRun struct{ id string }
 
 func (f *fakeRun) GetID() string                               { return f.id }
 func (f *fakeRun) GetRunID() string                            { return "run-1" }
+func (f *fakeRun) GetFirstExecutionRunID() string              { return "run-1" }
 func (f *fakeRun) Get(ctx context.Context, valuePtr any) error { return nil }
 func (f *fakeRun) GetWithOptions(ctx context.Context, valuePtr any, options client.WorkflowRunGetOptions) error {
 	return nil
