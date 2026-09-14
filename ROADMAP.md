@@ -915,6 +915,28 @@ Next.js app in `web/`:
 | 14.5| Failure-matrix row: sweep × in-flight manual reconcile → skip, no double-reconcile | ☑ |
 | 14.6| Case-study §6/§7 update: scheduled sweep implemented; honest note — per-tenant jitter still future | ☑ |
 
+### Phase 15 — External review hardening (9.3/10; freeze architecture)
+
+> Guidance from the September 2026 external review (see it summarized in
+> `docs/case-study.md` §0 / review notes): **stop adding subsystems.** The
+> remaining work is correctness/security evidence, not features. No new
+> services, no Kubernetes, no message queues. The modular-monolith + worker
+> boundary is final.
+
+| #   | Task                                                       | Status |
+| --- | ---------------------------------------------------------- | ------ |
+| 15.1| P0 verify — reconciliation false-convergence invariant: `missing DB → restore from verified backup → re-probe` else `unrecoverable → DLQ`; NEVER `exists == recovered`. Already implemented (Phase 13.1/`7422785`) + test-enforced (`MissingDatabaseWithoutBackupEscalates` etc.); make the invariant explicit in README + failure-matrix §3.7 | ☐ |
+| 15.2| P1 — concurrency race matrix: repository + workflow tests for DELETE×UPGRADE, DELETE×MIGRATE, DELETE×BACKUP, MIGRATE×BACKUP, RECONCILE×DELETE, RECONCILE×MIGRATE, RESTORE×DELETE — one op wins, loser 409s / records failed run, settles legal | ☐ |
+| 15.3| P1 verify — worker rollout compatibility: ADR-0008 already covers replay/statelessness/mixed-version risks; add self-contained "compatibility requirements" section (existing activities stay registered, histories replayable, GetVersion gating, atomic-restart deploys) | ☐ |
+| 15.4| P1 — security: authenticated reads. Only `GET /status` stays public; all tenant/list/event/backup/cost reads require a Keycloak bearer token (reader role gate where sensible); mutations keep `platform-admin`. Update router, middleware, handler tests, web token flow, docs | ☐ |
+| 15.5| P2 — resource-aware benchmarks: extend load test from 100 → 500 → 1000 tenants, capturing Postgres CPU/connections, Temporal task latency, worker CPU/RSS, Keycloak latency, docker resource counts; record "how far can the control plane scale" in `docs/load-test.md` | ☐ |
+| 15.6| README refresh: remove "read-only routes need no auth" claim, add "What this project proves" section (durable orchestration, idempotency, Saga, failure recovery, reconciliation, isolation, chaos, operational recovery) | ☐ |
+| 15.7| Dependency hygiene: resolve the 10 open Dependabot PRs (Temporal SDK/API, pgx, go-oidc, prometheus-common, Next.js, TS, React types) — merge only after gates green on this branch | ☐ |
+
+> Phase 15 completion feeds 12.4 (live showcase) and 12.5 (blog posts) — the
+> review's final recommendation is a case-study-first demo, not another
+> feature.
+
 ---
 
 ## 13. Learning Goals Checklist
