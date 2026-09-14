@@ -309,3 +309,144 @@ func TestUpdateTenantStatusFromSecondDeleteLoses(t *testing.T) {
 		t.Errorf("final Status = %q, want %q", got.Status, model.TenantStatusDeleting)
 	}
 }
+
+// TestUpdateTenantStatusFromLifecyclePairMatrix is the automated form of the
+// Phase 15.2 concurrency hazard pairs — DELETE×UPGRADE, DELETE×MIGRATE,
+// DELETE×BACKUP, MIGRATE×BACKUP, RECONCILE×DELETE, RECONCILE×MIGRATE,
+// RESTORE×DELETE — reduced to their tenants-row conflict surface.
+//
+// Mechanism: only DELETE performs a status CAS on the tenants row
+// (MarkTenantDeleting: active|failed → deleting; MarkTenantDeleted:
+// deleting → deleted). Its peers are row-READERS (UPGRADE's
+// VerifyTenantActive, RECONCILE's ResolveTenantSpec) or never touch the
+// tenants row at all (MIGRATE/BACKUP/RESTORE operate on the database layer
+// and the audit trail — the tenant stays "active" throughout). The
+// row-level invariant per pair is therefore:
+//
+//   - a pair containing DELETE commits exactly ONE write (the delete CAS,
+//     which never sees an ErrStatusConflict because the peer does not
+//     contend on the row) and the tenant settles in the legal "deleting"
+//     state;
+//   - the peer's concurrent read never observes a torn, empty, or illegal
+//     status — it sees "active" or "deleting", both legal;
+//   - a pair with no DELETE (MIGRATE×BACKUP, RECONCILE×MIGRATE) writes
+//     nothing: the tenant stays "active".
+//
+// The generic double-CAS loser-conflict mechanism (exactly one winner, loser
+// gets ErrStatusConflict) is proven by TestUpdateTenantStatusFromConcurrentRace
+// and TestUpdateTenantStatusFromSecondDeleteLoses above. The workflow-level
+// loser guards for the pairs are pinned by TestReconcileWorkflow_SkipsDeletingTenant
+// (RECONCILE×DELETE), TestUpgradeWorkflow_RejectsNonActiveTenant (DELETE×UPGRADE),
+// TestDeleteWorkflow_ResumeSkipsTransitionAndGrace (DELETE×DELETE), and the
+// single-flight "reconcile-<id>" workflow ID (handler tests).
+func TestUpdateTenantStatusFromLifecyclePairMatrix(t *testing.T) {
+	cases := []struct {
+		name      string
+		hasDelete bool // the DELETE leg performs the active|failed → deleting CAS
+	}{
+		{"DELETE×UPGRADE", true},
+		{"DELETE×MIGRATE", true},
+		{"DELETE×BACKUP", true},
+		{"MIGRATE×BACKUP", false},
+		{"RECONCILE×DELETE", true},
+		{"RECONCILE×MIGRATE", false},
+		{"RESTORE×DELETE", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pool := testPool(t)
+			repo := NewPostgresTenantRepository(pool)
+			ctx := context.Background()
+
+			id := uniqueTenantID("test-cas-pair")
+			if err := repo.CreateTenant(ctx, &model.Tenant{TenantID: id, Status: model.TenantStatusActive}); err != nil {
+				t.Fatalf("CreateTenant: %v", err)
+			}
+
+			// Legs: the pair's operations fired together so their row
+			// interactions truly interleave. DELETE is a status CAS; every
+			// peer (UPGRADE/MIGRATE/BACKUP/RECONCILE/RESTORE) is a row-reader.
+			type result struct {
+				err      error
+				observed model.TenantStatus
+				isDelete bool
+			}
+			read := func() result {
+				got, err := repo.GetTenant(ctx, id)
+				if err != nil {
+					return result{err: err}
+				}
+				return result{observed: got.Status}
+			}
+
+			const legs = 2
+			results := make(chan result, legs)
+			var wg sync.WaitGroup
+			wg.Add(legs)
+			if tc.hasDelete {
+				go func() { // DELETE leg: active|failed → deleting
+					defer wg.Done()
+					results <- result{err: repo.UpdateTenantStatusFrom(ctx, id, model.TenantStatusDeleting,
+						model.TenantStatusActive, model.TenantStatusFailed), isDelete: true}
+				}()
+			} else {
+				go func() { // first peer leg (audit-only op)
+					defer wg.Done()
+					results <- read()
+				}()
+			}
+			go func() { // second peer leg
+				defer wg.Done()
+				results <- read()
+			}()
+			wg.Wait()
+			close(results)
+
+			var writes, conflicts, illegal int
+			for r := range results {
+				switch {
+				case r.err != nil && errors.Is(r.err, ErrStatusConflict):
+					conflicts++
+				case r.err != nil:
+					t.Fatalf("unexpected error in %s: %v", tc.name, r.err)
+				case r.isDelete:
+					writes++
+				case r.observed != model.TenantStatusActive && r.observed != model.TenantStatusDeleting:
+					// A peer read may beat or trail the delete CAS — "active"
+					// and "deleting" are both legal. Anything else is a torn
+					// or corrupt observation.
+					illegal++
+				}
+			}
+
+			got, err := repo.GetTenant(ctx, id)
+			if err != nil {
+				t.Fatalf("GetTenant after race: %v", err)
+			}
+
+			if tc.hasDelete {
+				if writes != 1 || conflicts != 0 {
+					t.Errorf("writes=%d conflicts=%d, want exactly one CAS commit and no conflict (single row-writer) for %s",
+						writes, conflicts, tc.name)
+				}
+				if got.Status != model.TenantStatusDeleting {
+					t.Errorf("final Status = %q, want %q (delete CAS must settle the pair)",
+						got.Status, model.TenantStatusDeleting)
+				}
+			} else {
+				if writes != 0 || conflicts != 0 {
+					t.Errorf("writes=%d conflicts=%d, want zero row writes for audit-only pair %s",
+						writes, conflicts, tc.name)
+				}
+				if got.Status != model.TenantStatusActive {
+					t.Errorf("final Status = %q, want %q (audit-only pair must not move the row)",
+						got.Status, model.TenantStatusActive)
+				}
+			}
+			if illegal > 0 {
+				t.Errorf("a leg observed an illegal/torn status in %s (%d observations)", tc.name, illegal)
+			}
+		})
+	}
+}

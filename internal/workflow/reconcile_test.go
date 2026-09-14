@@ -1,12 +1,14 @@
 package workflow
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
 	"github.com/2SSK/tenantflow/internal/activities"
 	"github.com/2SSK/tenantflow/internal/model"
 	"github.com/stretchr/testify/mock"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 )
 
@@ -70,6 +72,11 @@ func TestReconcileWorkflow_ConvergedWhenNoDrift(t *testing.T) {
 // MISSING (potential data loss) plus the missing role. The run must restore
 // from the latest verified backup BEFORE any other repair, then re-probe to
 // prove convergence, and report the run as repaired.
+//
+// The re-probe returning the database present AND owned by the tenant role
+// (with a completed backup on record) is what makes this ACTUAL recovery
+// rather than mere existence: the run only converges when the restored
+// database matches the desired state by construction.
 func TestReconcileWorkflow_MissingDatabaseRestoresFromBackupAndConverges(t *testing.T) {
 	ts := &testsuite.WorkflowTestSuite{}
 	env := ts.NewTestWorkflowEnvironment()
@@ -117,6 +124,12 @@ func TestReconcileWorkflow_MissingDatabaseRestoresFromBackupAndConverges(t *test
 // silently destroy the tenant's data and look like convergence); it escalates
 // with a non-retryable error (lands straight in the DLQ) and audits the
 // decision. Retry cannot help — no retry manufactures a backup.
+//
+// THE INVARIANT: resource exists != resource recovered. A database that
+// exists is not proof the tenant's data is back — recovery means
+// restore-from-verified-backup, or escalate-to-operator when no verified
+// backup exists. Claiming convergence on an empty replacement would paper
+// over data loss.
 func TestReconcileWorkflow_MissingDatabaseWithoutBackupEscalates(t *testing.T) {
 	ts := &testsuite.WorkflowTestSuite{}
 	env := ts.NewTestWorkflowEnvironment()
@@ -143,8 +156,22 @@ func TestReconcileWorkflow_MissingDatabaseWithoutBackupEscalates(t *testing.T) {
 	if !env.IsWorkflowCompleted() {
 		t.Fatal("workflow did not complete")
 	}
-	if err := env.GetWorkflowError(); err == nil {
+	err := env.GetWorkflowError()
+	if err == nil {
 		t.Fatal("expected workflow error for unrecoverable run, got nil")
+	}
+	// The DLQ guarantee: the escalation is a NON-RETRYABLE
+	// "ReconcileUnrecoverable" application error — retrying cannot
+	// manufacture a backup, so the run must skip retry and land in the DLQ.
+	var appErr *temporal.ApplicationError
+	if !errors.As(err, &appErr) {
+		t.Fatalf("expected a ReconcileUnrecoverable application error, got: %v", err)
+	}
+	if appErr.Type() != "ReconcileUnrecoverable" {
+		t.Errorf("application error type = %q, want %q", appErr.Type(), "ReconcileUnrecoverable")
+	}
+	if !appErr.NonRetryable() {
+		t.Errorf("escalation must be non-retryable (straight to DLQ), got retryable")
 	}
 
 	env.AssertCalled(t, activities.MarkReconcileUnrecoverableActivityName, mock.Anything, "acme-rec", mock.Anything)
@@ -267,6 +294,40 @@ func TestReconcileWorkflow_SkipsNonActiveTenant(t *testing.T) {
 	env.AssertNotCalled(t, activities.ProbeTenantActualStateActivityName, mock.Anything, mock.Anything)
 	env.AssertNotCalled(t, activities.EnsureTenantDatabaseActivityName, mock.Anything, "acme-rec")
 	env.AssertNotCalled(t, activities.MarkReconcileConvergedActivityName, mock.Anything, "acme-rec", mock.Anything)
+}
+
+// RECONCILE×DELETE guard (15.2): the delete workflow's MarkTenantDeleting CAS
+// (active|failed → deleting) commits atomically; a reconcile resolving the
+// spec AFTER that sees "deleting" and must SKIP — never probe, repair, or
+// converge a half-torn-down tenant. This pins the losing leg of the pair:
+// the tenant is already owned by the delete saga, so the plane stays out.
+func TestReconcileWorkflow_SkipsDeletingTenant(t *testing.T) {
+	ts := &testsuite.WorkflowTestSuite{}
+	env := ts.NewTestWorkflowEnvironment()
+
+	env.RegisterActivity(activities.NewReconcileActivities(nil, nil, nil, nil, nil))
+
+	deletingSpec := activeReconcileSpec()
+	deletingSpec.Status = model.TenantStatusDeleting
+
+	env.OnActivity(activities.ResolveTenantSpecActivityName, mock.Anything, "acme-rec").Return(deletingSpec, nil)
+	env.OnActivity(activities.MarkReconcileSkippedActivityName, mock.Anything, "acme-rec", mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(ReconcileTenantWorkflow, ReconcileInput{TenantID: "acme-rec"})
+
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("workflow did not complete")
+	}
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatalf("unexpected workflow error: %v", err)
+	}
+
+	env.AssertCalled(t, activities.MarkReconcileSkippedActivityName, mock.Anything, "acme-rec", mock.Anything)
+	env.AssertNotCalled(t, activities.ProbeTenantActualStateActivityName, mock.Anything, mock.Anything)
+	env.AssertNotCalled(t, activities.EnsureTenantDatabaseActivityName, mock.Anything, "acme-rec")
+	env.AssertNotCalled(t, activities.RestoreTenantFromBackupActivityName, mock.Anything, "acme-rec")
+	env.AssertNotCalled(t, activities.MarkReconcileConvergedActivityName, mock.Anything, "acme-rec", mock.Anything)
+	env.AssertNotCalled(t, activities.MarkReconcileFailedActivityName, mock.Anything, "acme-rec", mock.Anything)
 }
 
 // Shared-mode tenants promise no per-tenant infrastructure, so an active

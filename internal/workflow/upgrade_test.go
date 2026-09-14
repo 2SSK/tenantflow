@@ -73,3 +73,35 @@ func TestUpgradeWorkflow_FailureRollsBackQuotas(t *testing.T) {
 	env.AssertCalled(t, activities.MarkTenantUpgradeFailedActivityName, mock.Anything, "acme-dn")
 	env.AssertNotCalled(t, activities.MarkTenantUpgradedActivityName, mock.Anything, "acme-dn")
 }
+
+// DELETE×UPGRADE guard (15.2): the delete workflow's MarkTenantDeleting CAS
+// won and moved the tenant to "deleting", so this upgrade's
+// VerifyTenantActive finds the tenant NOT active and the saga must stop
+// BEFORE raising quotas. The deferred compensation still audits
+// MarkTenantUpgradeFailed. A losing upgrade must never raise quotas on a
+// tenant being torn down.
+func TestUpgradeWorkflow_RejectsNonActiveTenant(t *testing.T) {
+	ts := &testsuite.WorkflowTestSuite{}
+	env := ts.NewTestWorkflowEnvironment()
+
+	env.RegisterActivity(activities.NewUpgradeActivities(nil, nil, nil))
+
+	env.OnActivity(activities.MarkTenantUpgradingActivityName, mock.Anything, "acme-up").Return(nil)
+	env.OnActivity(activities.VerifyTenantActiveActivityName, mock.Anything, "acme-up").
+		Return(billing.Quota{}, fmt.Errorf("tenant acme-up is not active"))
+	env.OnActivity(activities.MarkTenantUpgradeFailedActivityName, mock.Anything, "acme-up").Return(nil)
+
+	env.ExecuteWorkflow(UpgradeTenantWorkflow, UpgradeInput{TenantID: "acme-up"})
+
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("workflow did not complete")
+	}
+	if err := env.GetWorkflowError(); err == nil {
+		t.Fatal("expected workflow error, got nil")
+	}
+
+	env.AssertCalled(t, activities.MarkTenantUpgradeFailedActivityName, mock.Anything, "acme-up")
+	env.AssertNotCalled(t, activities.RaiseQuotasActivityName, mock.Anything, "acme-up", mock.Anything)
+	env.AssertNotCalled(t, activities.RollbackQuotasActivityName, mock.Anything, "acme-up", mock.Anything)
+	env.AssertNotCalled(t, activities.MarkTenantUpgradedActivityName, mock.Anything, "acme-up")
+}
