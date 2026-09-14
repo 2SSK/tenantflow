@@ -34,7 +34,37 @@ Every claim above is **documented and test-enforced**, not asserted:
 - [`docs/failure-matrix.md`](docs/failure-matrix.md) — every activity × failure → compensation range + proof
 - [`docs/load-test.md`](docs/load-test.md) — only real measured numbers (100-tenant runs, shared + dedicated)
 - [`docs/demo.md`](docs/demo.md) — one-take demo script (`scripts/demo/run-demo.sh`) + shot list for the 60–120s video
-- [`docs/adr/`](docs/adr/) — ADRs 0001–0007 recording *why* (Temporal, DB-per-tenant, saga, owner roles, soft delete…)
+- [`docs/adr/`](docs/adr/) — ADRs 0001–0008 recording *why* (Temporal, DB-per-tenant, saga, owner roles, soft delete…)
+
+## What this project proves
+
+Ten claims, each one a concrete, test-enforced property rather than a boast:
+
+- **Durable orchestration** — every lifecycle operation survives crashes:
+  a worker that dies mid-run replays history and finishes the job.
+- **Idempotent infrastructure operations** — every activity converges on
+  retry (inspect-before-create, pre-drop leftovers, 404-as-success deletes),
+  proven by live retry-window integration tests.
+- **Saga compensation** — half-done multi-step work (a created DB, a consumed
+  quota, a granted identity) is rolled back when a later step fails.
+- **Failure recovery** — a failed run drains to the DLQ and resumes with one
+  call, distinguishing "re-provision" from "resume the deletion" instead of
+  blindly replaying.
+- **Reconciliation** — drifting tenants are re-driven to their declared state
+  by a re-runnable workflow, not by manual poking.
+- **Multi-tenant isolation** — DB-per-tenant with dedicated roles and revoked
+  `PUBLIC CONNECT`; quotas, audit and cost records stay per-tenant.
+- **Database lifecycle management** — provision, upgrade, migrate, backup,
+  restore and soft-delete are versioned, scripted operations — never ad-hoc
+  DBA sessions.
+- **Observability** — structured logs, Prometheus metrics with a per-tenant
+  cost collector, Grafana dashboards, Temporal UI; every claim above is
+  visible in a running system.
+- **Chaos testing** — runtime fault injection (`TENANTFLOW_CHAOS_*`) makes the
+  worker fail real activities; the hard-problem section reproduces the
+  failure and the one-call recovery that followed.
+- **Operational recovery** — the delete-failure → DLQ → retry loop is run
+  end-to-end in tests and the demo script, not just described in prose.
 
 ## Architecture
 
@@ -98,19 +128,37 @@ go run ./cmd/worker         # consumes the tenantflow task queue
 
 ## API
 
-Read-only routes need no auth; mutating routes require a Keycloak bearer token with the `platform-admin` role.
+One route stays public: `GET /status` (liveness — a load balancer probes it
+without credentials). Every tenant read — list, detail, events, backups, cost
+— requires a valid Keycloak bearer token and is open to any authenticated
+platform user. All mutations and the failed-runs DLQ additionally require the
+`platform-admin` role.
 
 | Method & path | Auth | Purpose |
 |---|---|---|
-| `GET /status` | – | liveness |
-| `GET /api/v1/tenants` · `/{id}` | – | list / detail |
-| `GET /api/v1/tenants/{id}/events` · `/backups` · `/cost` | – | audit / backup history / cost |
+| `GET /status` | – | liveness (public) |
+| `GET /api/v1/tenants` · `/{id}` | auth | list / detail |
+| `GET /api/v1/tenants/{id}/events` · `/backups` · `/cost` | auth | audit / backup history / cost |
 | `POST /api/v1/tenants` | admin | provision (`{"tenantID","isolationMode":"dedicated\|shared"}`) |
 | `DELETE /api/v1/tenants/{id}` | admin | soft delete (grace period, then deprovision) |
 | `POST /tenants/{id}/cancel-delete` | admin | interrupt a pending deletion |
 | `POST /tenants/{id}/upgrade` · `/migrate` · `/backup` · `/restore` | admin | lifecycle operations |
 | `GET /api/v1/failed-runs` | admin | DLQ: failed workflow runs |
 | `POST /api/v1/tenants/{id}/retry` | admin | resume a stuck deletion / re-provision |
+
+### Authorization model
+
+| Token | Can do |
+|---|---|
+| (none) | `GET /status` only |
+| any authenticated user (`platform-operator`) | read tenants, events, backups, cost |
+| `platform-admin` | everything above + create / upgrade / migrate / backup / restore / delete / reconcile / retry + failed-runs DLQ |
+
+The realm has exactly two roles, so the model is the simplest one consistent
+with them: **reads for any authenticated platform user — the operator role is
+the read-only tier — and writes for admins.** `GET /status` stays public so
+load balancers can probe liveness before anyone logs in. Router-level tests
+enforce the boundaries end-to-end (`internal/router/router_test.go`).
 
 ## Reliability & recovery
 
@@ -143,7 +191,7 @@ make integration     # real Postgres + real Keycloak (also runs in CI)
 | [docs/failure-matrix.md](docs/failure-matrix.md) | What happens if any activity fails? |
 | [docs/load-test.md](docs/load-test.md) | Real numbers: 100-tenant provision/delete, shared + dedicated |
 | [docs/demo.md](docs/demo.md) + [scripts/demo/run-demo.sh](scripts/demo/run-demo.sh) | One-take demo: happy path → failure/DLQ → replay → reconcile |
-| [docs/adr/](docs/adr/) | Why these decisions? (7 ADRs) |
+| [docs/adr/](docs/adr/) | Why these decisions? (8 ADRs) |
 | [ROADMAP.md](ROADMAP.md) | Build plan with completion tracking |
 | [CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md) | Contributing & reporting |
 

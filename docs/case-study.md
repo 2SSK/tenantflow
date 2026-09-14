@@ -127,6 +127,23 @@ the DLQ with a readable reason. External `DROP DATABASE` on a backed-up
 tenant converged with marker data restored from the backup; the same drop on
 an unbacked-up tenant left the database absent and the operator in control.
 
+### 3.7 Every read is authenticated
+
+The control plane is a REST API in front of a durable engine — reads are
+cheap, but they reveal platform topology (which tenants exist, their state,
+events, backups, cost). Phase 15.4 removed the last unauthenticated surface:
+only `GET /status` stays public, and only because a load balancer must probe
+liveness before anyone has logged in. Every tenant read requires a valid
+Keycloak bearer token; the realm's two roles map onto a deliberately simple
+model — **any authenticated platform user may read, `platform-admin` may
+write**. `platform-operator` is therefore the honest read-only tier (inspect
+tenants, events, backups, cost), while every mutation and the failed-runs DLQ
+demand the admin role. The boundaries are proven at the router, not just the
+handler: `internal/router/router_test.go` drives real HTTP requests through
+the mux and asserts 401 (no/invalid token), 403 (operator on a write), and
+200/202 (authorized), so a regression in the middleware wiring fails a test
+instead of leaking a tenant list.
+
 ## 4. Failure handling done for real
 
 The failure matrix is not a table of hypotheticals: the repo drives each

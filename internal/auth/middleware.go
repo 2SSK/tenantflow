@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 )
 
@@ -12,7 +13,15 @@ const (
 	UserRolesKey contextKey = "user_roles"
 )
 
-func RequireAuth(provider *Provider, next http.Handler) http.Handler {
+// TokenVerifier validates an access token and returns its claims. *Provider
+// is the production implementation (OIDC verification against Keycloak); the
+// router tests substitute a stub so authorization behavior can be exercised
+// without a running Keycloak.
+type TokenVerifier interface {
+	VerifyToken(ctx context.Context, token string) (*Claims, error)
+}
+
+func RequireAuth(provider TokenVerifier, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, err := ExtractToken(r)
 		if err != nil {
@@ -22,7 +31,7 @@ func RequireAuth(provider *Provider, next http.Handler) http.Handler {
 
 		claims, err := provider.VerifyToken(r.Context(), token)
 		if err != nil {
-			provider.log.Error("token verification failed", "error", err)
+			slog.Default().Error("token verification failed", "error", err)
 			writeUnauthorized(w, "invalid token")
 			return
 		}

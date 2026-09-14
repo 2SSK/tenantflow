@@ -87,3 +87,43 @@ Negative:
   pattern
 - `docs/failure-matrix.md` — replay guarantees that depend on determinism
 - Phase 13.1 live validation — restore + escalation across worker restarts
+
+---
+
+## Compatibility requirements (from 2026-09 external review)
+
+External review of the worker/deploymint model (Phase 15 review) flagged that
+the decision above is right for TenantFlow's *operation-day* posture but is
+silent on *change-day* compatibility. The following are requirements — not a
+revision of the decision — that any evolution of this ADR must keep true:
+
+1. **Activities stay registered across deploys.** A redeploy may add or
+   remove activities, but it must never leave a workflow's previously
+   recorded activity references unregistered *while in-flight runs exist*.
+   Registration is code-driven (`internal/worker/worker.go`); removing an
+   activity a running workflow still references is a replay hazard, so
+   removals count as behavior changes (gated per 3) and must wait for the run
+   to close where possible.
+
+2. **Workflow histories stay replayable.** Every deployed binary must be able
+   to replay *any* history the Temporal server holds for the tenantflow task
+   queue from the moment it was started — otherwise the "resume from DLQ"
+   promise (ADR-0004 saga, failure-matrix §3) silently breaks. All-or-nothing
+   versioned deployment is the mechanism that keeps this true.
+
+3. **Behavior changes are gated with `workflow.GetVersion`, never silent.**
+   Changing what a workflow decides (new step, reordered step, new activity
+   argument shape, changed guard semantics) without a version marker is a
+   determinism violation on replay. Every behavior change must be introduced
+   with the Temporal SDK versioning API so old and new decisions coexist
+   deterministically during the deployment window. (The current codebase has
+   no versioned workflows yet — this requirement gates *future* changes, it
+   does not mandate retrofitting.)
+
+4. **Deploys are atomic restarts, not rolling mixed versions.** The
+   all-or-nothing model (API + worker at the same commit, one task queue, one
+   worker family) means a deployment must not run two binaries with different
+   code against the same queue at the same time. The accepted negative
+   consequence (sub-second downtime on restart) is the price of replay
+   determinism; a mixed-version rolling upgrade would reintroduce the exact
+   drift this ADR was written to rule out.

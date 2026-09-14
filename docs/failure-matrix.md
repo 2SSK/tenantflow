@@ -218,13 +218,20 @@ Coverage is now full and position-exact:
   escalation is the one non-retryable exit.
 - Scenarios: `ConvergedWhenNoDrift`,
   `MissingDatabaseRestoresFromBackupAndConverges` (missing DB + verified
-  backup → restore → converge),
+  backup → restore → converge — the re-probe proves the restore landed,
+  existence ≠ recovery),
   `MissingDatabaseWithoutBackupEscalates` (missing DB + no backup →
   `TENANT_RECONCILE_UNRECOVERABLE`, **Ensures the create-empty repair is
-  never reached**, run fails non-retryable → DLQ),
+  never reached**, run fails with a **non-retryable**
+  `ReconcileUnrecoverable` application error → DLQ; the invariant —
+  resource exists ≠ resource recovered: recovery means
+  restore-from-verified-backup or escalate-to-operator, "exists == converged"
+  would paper over data loss),
   `MissingBackupOnlyRepairs` (healthy DB, capture backup, converge),
   `UnconvergedAfterRepairFails` (the only legitimate `MarkReconcileFailed`
-  path), `SkipsNonActiveTenant`, `SharedTenantConvergesWithoutProbe`.
+  path), `SkipsNonActiveTenant`, `SkipsDeletingTenant` (RECONCILE×DELETE
+  guard: after the delete CAS wins, reconcile skips instead of probing a
+  half-torn-down tenant), `SharedTenantConvergesWithoutProbe`.
 - Activity-level: `RestoreTenantFromBackup` happy path (newest-first list
   skips failed/pending rows, recreates DB, restores, re-applies ownership,
   validates, audits `TENANT_RECONCILE_RESTORED`), no-verified-backup
@@ -239,7 +246,7 @@ Coverage is now full and position-exact:
 | Duplicate `POST /api/v1/tenants` | 409 conflict, no second workflow | `CreateTenatConflict` (handler) |
 | Duplicate reconcile while in flight | 409, no duplicate workflow | `ReconcileTenantAlreadyInFlight` (handler) |
 | Scheduled sweep starts a reconcile while a manual one is in flight for the same tenant | Sweep's child start hits WorkflowExecutionAlreadyStarted → logged and skipped; no double workflow, no interference | `TestReconcileSweepWorkflow_DeduplicatesTenantInList` (in-list dedup) + same-ID reuse-policy guard exercised against the manual endpoint path (`workflowID "reconcile-<id>", ALLOW_DUPLICATE`) |
-| Concurrent lifecycle ops on one tenant (DELETE×UPGRADE, DELETE×BACKUP, MIGRATE×BACKUP, RECONCILE×MIGRATE, RECONCILE×DELETE) | Exactly one CAS write commits; the loser 409s or records a failed run — tenant settles in a legal state, no corruption | `TestUpdateTenantStatusFromConcurrentRace`, `TestUpdateTenantStatusFromSecondDeleteLoses` (repository, integration) + live pair validation (Phase 13.4) |
+| Concurrent lifecycle ops on one tenant (DELETE×UPGRADE, DELETE×MIGRATE, DELETE×BACKUP, MIGRATE×BACKUP, RECONCILE×DELETE, RECONCILE×MIGRATE, RESTORE×DELETE) | The tenant settles in a legal state with no corruption. Row-level mechanism: only DELETE CAS-writes the tenants row (active\|failed → deleting), its peers are row-readers or row-agnostic (audit-only), so exactly one write commits and the loser-guard at workflow level stops the peer (reconcile skips non-active, upgrade rejects non-active, delete resume skips the transition, sweep preserves `reconcile-<id>` workflow identities) | Double-CAS loser mechanism: `TestUpdateTenantStatusFromConcurrentRace`, `TestUpdateTenantStatusFromSecondDeleteLoses` (repository, integration) + live pair validation (Phase 13.4); per-pair row matrix: `TestUpdateTenantStatusFromLifecyclePairMatrix` (repository, integration); workflow guards: `TestReconcileWorkflow_SkipsDeletingTenant`, `TestUpgradeWorkflow_RejectsNonActiveTenant`, `TestDeleteWorkflow_ResumeSkipsTransitionAndGrace`, `ReconcileTenantAlreadyInFlight`/sweep dedup (handler) |
 | Same run executing many activities → recorder dedupe | Only one `workflow_instances` row per run | `TestRecorder_RunningIsIdempotent` |
 | Run fails after several activities | Row transitions running → failed with the error message | `TestRecorder_RunningThenFailed` |
 | Recorder's repo is down | Failure is logged and swallowed — never breaks the workflow | `TestRecorder_BestEffortOnRepoError` |
@@ -249,6 +256,21 @@ Coverage is now full and position-exact:
 | Delete canceled during grace period | Cancel workflow instead of teardown | `DeleteWorkflow_CancelSignalDuringGracePeriod` |
 | Cancel signal after teardown started | `CancelRestoreFails` — cancels on dead workflows are not errors | `DeleteWorkflow_CancelRestoreFails` |
 | Delete workflow resumed after restart | Skips transition + grace period already elapsed | `DeleteWorkflow_ResumeSkipsTransitionAndGrace` |
+
+Authorization is a non-activity failure point: a request arriving without the
+right credential must fail *before* any workflow starts. Phase 15.4 model:
+`GET /status` stays public (liveness), every tenant read requires any valid
+bearer token (the `platform-operator` role is the read-only tier), and every
+mutation plus the failed-runs DLQ requires `platform-admin`.
+
+| Failure point | Expected behavior | Proven by |
+|---|---|---|
+| Unauthenticated read on any tenant endpoint (list, detail, events, backups, cost) | 401, no tenant data leaves the API | `TestRouter_UnauthenticatedReadsRejected`, `TestRouter_InvalidTokenReadsRejected` (router) |
+| Authenticated read with a valid token — operator or admin | 200 — reads are open to every platform user | `TestRouter_AuthenticatedReadsAllowed` (router) |
+| `GET /status` without a token | 200 — the only public route, for load-balancer liveness | `TestRouter_PublicStatusNoAuth` (router) |
+| Non-admin token on any mutation or the failed-runs DLQ | 403, no workflow starts | `TestRouter_NonAdminMutationForbidden`, `TestRouter_FailedRunsRequiresAdmin` (router) |
+| Unauthenticated mutation or DLQ read | 401 — the credential gate fires before the role gate | `TestRouter_UnauthenticatedMutationsRejected` (router) |
+| Admin mutation / admin DLQ read | 202 / 200 — the authorized path is intact | `TestRouter_AdminMutationsAccepted`, `TestRouter_FailedRunsRequiresAdmin` (router) |
 
 ---
 
