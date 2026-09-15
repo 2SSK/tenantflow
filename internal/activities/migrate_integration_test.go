@@ -273,3 +273,137 @@ func TestProvisionTenantResumesAfterPartialCreate(t *testing.T) {
 		t.Errorf("PUBLIC can still CONNECT; isolation posture not re-applied")
 	}
 }
+
+// TestRestoreTenantFromBackup_DropsResidueBeforeCreate is the end-to-end
+// version of the unit test: it simulates the Temporal retry window against
+// the real postgres container and proves convergence.
+//
+// Sequence:
+//  1. seed tenant_<id> with proof_table + row, snapshot it → the verified backup
+//  2. drop the database (the DriftMissingDatabase data-loss event)
+//  3. recreate tenant_<id> with only residue_table (the crashed attempt's residue)
+//  4. record the backup as completed in the real backup repo
+//  5. run RestoreTenantFromBackup inside a Temporal activity env
+//  6. assert proof_table came back from the verified backup — and
+//     residue_table is GONE, proving the pre-drop destroyed the partial state
+func TestRestoreTenantFromBackup_DropsResidueBeforeCreate(t *testing.T) {
+	ctx := context.Background()
+	p := iprovider(t)
+	tenantID := itenantID("itres-drop")
+	live := cloud.TenantDatabaseName(tenantID)
+
+	platformPool, err := pgxpool.New(ctx, idatabaseURL("tenantflow"))
+	if err != nil {
+		t.Fatalf("connect to platform database: %v", err)
+	}
+	defer platformPool.Close()
+
+	// Audit events FK to tenants, so the row must exist before the activity
+	// writes its event. Provisioning status keeps the test tenant invisible
+	// to the live reconcile sweep, which skips non-active tenants.
+	seedTenants := repository.NewPostgresTenantRepository(platformPool)
+	if err := seedTenants.CreateTenant(ctx, &model.Tenant{
+		TenantID:      tenantID,
+		Status:        model.TenantStatusProvisioning,
+		WorkflowID:    ptr("reconcile-" + tenantID),
+		IsolationMode: model.IsolationModeDedicated,
+	}); err != nil {
+		t.Fatalf("seed tenant record: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = p.DropDatabase(ctx, tenantID)
+		_ = p.DropTenantRole(ctx, tenantID)
+	})
+
+	// Step 1 — the pre-crash database with the data we want back. The tenant
+	// DB is isolated (PUBLIC CONNECT revoked), so the seed connects to it
+	// directly as the superuser rather than crossing databases (PostgreSQL
+	// has no cross-database queries).
+	if err := p.CreateDatabase(ctx, tenantID); err != nil {
+		t.Fatalf("create seed database: %v", err)
+	}
+	seedPool, err := pgxpool.New(ctx, idatabaseURL(live))
+	if err != nil {
+		t.Fatalf("connect to seed database: %v", err)
+	}
+	if _, err := seedPool.Exec(ctx, `CREATE TABLE proof_table (id integer)`); err != nil {
+		t.Fatalf("create proof table: %v", err)
+	}
+	if _, err := seedPool.Exec(ctx, `INSERT INTO proof_table VALUES (1)`); err != nil {
+		t.Fatalf("insert proof row: %v", err)
+	}
+	seedPool.Close()
+	dumpName, err := p.SnapshotDatabase(ctx, tenantID)
+	if err != nil {
+		t.Fatalf("snapshot seed database: %v", err)
+	}
+
+	// Step 2 — data loss: the database goes missing.
+	if err := p.DropDatabase(ctx, tenantID); err != nil {
+		t.Fatalf("drop database (data-loss event): %v", err)
+	}
+
+	// Step 3 — crash residue: a retried attempt created the DB and got partway
+	// through the restore (residue_table only; proof_table is still absent).
+	if err := p.CreateDatabase(ctx, tenantID); err != nil {
+		t.Fatalf("recreate database as crash residue: %v", err)
+	}
+	residuePool, err := pgxpool.New(ctx, idatabaseURL(live))
+	if err != nil {
+		t.Fatalf("connect to residue database: %v", err)
+	}
+	if _, err := residuePool.Exec(ctx, `CREATE TABLE residue_table (id integer)`); err != nil {
+		t.Fatalf("create residue table: %v", err)
+	}
+	residuePool.Close()
+
+	// Step 4 — the verified backup is on record.
+	backupRepo := repository.NewPostgresBackupRepository(platformPool)
+	created, err := backupRepo.CreateBackup(ctx, &model.Backup{TenantID: tenantID, Filename: dumpName})
+	if err != nil {
+		t.Fatalf("seed backup record: %v", err)
+	}
+	if err := backupRepo.MarkBackupCompleted(ctx, created.ID); err != nil {
+		t.Fatalf("mark backup completed: %v", err)
+	}
+
+	// Step 5 — run the activity (the audit write requires a Temporal env).
+	act := NewReconcileActivities(nil, realAuditRepo(t), backupRepo, p, nil)
+	if err := runRestore(t, act, tenantID); err != nil {
+		t.Fatalf("RestoreTenantFromBackup retry after crash residue: %v", err)
+	}
+
+	// Step 6 — convergence: the isolation shape is re-applied, proof_table
+	// came back from the verified backup…
+	st, err := p.InspectDatabase(ctx, live)
+	if err != nil {
+		t.Fatalf("inspect live: %v", err)
+	}
+	if !st.Exists {
+		t.Fatal("live database missing after restore retry")
+	}
+	if st.OwnerRole != live {
+		t.Errorf("owner = %q, want %q (ownership was not re-asserted)", st.OwnerRole, live)
+	}
+	if st.PublicConnect {
+		t.Errorf("PUBLIC can still CONNECT; isolation posture not re-applied")
+	}
+	verifyPool, err := pgxpool.New(ctx, idatabaseURL(live))
+	if err != nil {
+		t.Fatalf("connect to restored database: %v", err)
+	}
+	defer verifyPool.Close()
+	var n int
+	if err := verifyPool.QueryRow(ctx, `SELECT count(*) FROM proof_table`).Scan(&n); err != nil {
+		t.Fatalf("query proof_table after restore: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("proof_table rows = %d, want 1 (verified backup was not restored)", n)
+	}
+	// …and residue_table is GONE, proving the pre-drop removed the crashed
+	// attempt's partial state instead of restoring on top of it.
+	var m int
+	if err := verifyPool.QueryRow(ctx, `SELECT count(*) FROM residue_table`).Scan(&m); err == nil {
+		t.Errorf("residue_table still exists (rows=%d) after restore; the pre-drop did not fire", m)
+	}
+}

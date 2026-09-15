@@ -309,8 +309,25 @@ func (a *ReconcileActivities) RestoreTenantFromBackup(ctx context.Context, tenan
 	}
 
 	dbName := cloud.TenantDatabaseName(tenantID)
+
+	// Idempotency across the activity-retry window (see docs/idempotency.md
+	// §4.1): a previous attempt may have crashed AFTER CreateDatabase but
+	// before completing the restore, leaving a partially-restored database
+	// behind. A naive retry died with "database already exists" and stranded
+	// the tenant's drift repair in the DLQ. The drift that invoked this leg
+	// was DriftMissingDatabase — the tenant's database was already gone, so
+	// the ONLY trustworthy state is a restored, verified backup: whatever
+	// exists on disk is residue from our own crashed attempt and must go.
+	// Pre-drop (DropDatabase is idempotent, DROP DATABASE IF EXISTS) BEFORE
+	// creating, so the restore always targets a freshly created database.
+	// This follows the audit's Rule 2 — "fixed-name disposable databases must
+	// be pre-dropped before use" — the same pattern MigrateData and
+	// BackupTenantData already use for their fixed-name _new/_temp databases.
+	if err := a.provider.DropDatabase(ctx, tenantID); err != nil {
+		return fmt.Errorf("pre-drop residue for tenant %s: %w", tenantID, err)
+	}
 	if err := a.provider.CreateDatabase(ctx, tenantID); err != nil {
-		return fmt.Errorf("recreate database for tenant %s: %w", tenantID, err)
+		return fmt.Errorf("create database for tenant %s: %w", tenantID, err)
 	}
 	if err := a.provider.RestoreDatabaseFromBackup(ctx, dbName, latest.Filename); err != nil {
 		return fmt.Errorf("restore backup %q into %s: %w", latest.Filename, dbName, err)

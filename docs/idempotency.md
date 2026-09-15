@@ -99,6 +99,7 @@ Meaning of the columns:
 | RestoreData | activity | ⚠️ **Known gap** (§4.2) | Plain restore into the live DB. Retry after a partial restore hits "relation already exists". Mitigation: pre-restore snapshot exists for rollback; remediation = rollback, not re-run. |
 | PreRestoreSnapshot | activity | ✅ | New artifact per run. |
 | RestoreRollback | activity | ⚠️ Same as RestoreData | Same mitigation. |
+| RestoreTenantFromBackup (reconcile) | activity | ✅ | **Fixed in this audit** (§4.1): pre-drops the recreated `tenant_<id>` before restoring, so a retried attempt re-does the restore into a fresh DB instead of dying with "database already exists". Proven by `TestRestoreTenantFromBackup_PreDropsResidue` (unit) + `TestRestoreTenantFromBackup_DropsResidueBeforeCreate` (integration). |
 | Reconcile: ProbeTenantActualState | activity | ✅ | Read-only probes. |
 | Reconcile: EnsureTenantDatabase | activity | ✅ | Check-then-act: create only if missing, then re-assert ownership. |
 | Reconcile: RecordDrift / MarkConverged / MarkSkipped / MarkFailed | activity | ✅ | Idempotent. |
@@ -111,7 +112,7 @@ Meaning of the columns:
 
 ## 4. The audit findings
 
-The table above contains five fixes and one accepted gap.
+The table above contains six fixes and one accepted gap.
 
 ### 4.1 Fixed in this audit
 
@@ -152,6 +153,24 @@ Proofs: `TestProvisionTenantIdentityCreatesWhenAbsent`,
 `TestProvisionTenantIdentityReusesExisting` (fast unit tests with a recording
 fake), and `TestProvisionTenantIdentityGetOrCreateLive` (real Keycloak,
 double-call converges to the same user ID).
+
+**RestoreTenantFromBackup** (`internal/activities/reconcile.go`):
+the reconcile restore leg invoked on `DriftMissingDatabase` recreated the
+tenant database and restored into it — but a crash between `CreateDatabase`
+and the restore's completion left a partially-restored DB, and the activity
+retry died at the raw `CreateDatabase` with "database already exists" (the
+same bug class §3.1 fixed for ProvisionTenant). Now: pre-drop `tenant_<id>`
+before creating (`DROP DATABASE IF EXISTS` is idempotent), so every retry
+restores into a freshly created database. This is safe because the drift that
+invoked the leg was missing-database: the tenant's previous data was already
+gone, and the only trustworthy state is the verified backup artifact — the
+residue is our own crashed attempt's partial work. It follows the audit's own
+Rule 2 — "fixed-name disposable databases must be pre-dropped before use" —
+the identical pattern MigrateData and BackupTenantData use for `_new`/`_temp`.
+Proofs: `TestRestoreTenantFromBackup_PreDropsResidue` (unit: asserts
+drop-before-create ordering) and the integration twin
+`TestRestoreTenantFromBackup_DropsResidueBeforeCreate` (real postgres:
+proof table restored from the verified backup, residue table gone).
 
 ### 4.2 Accepted gaps (documented, not silent)
 

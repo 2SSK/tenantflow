@@ -112,6 +112,35 @@ func TestRestoreTenantFromBackup_NoVerifiedBackupReturnsSentinel(t *testing.T) {
 	require.Empty(t, provider.restoredTargets)
 }
 
+// TestRestoreTenantFromBackup_PreDropsResidue simulates the retry
+// window the pre-drop closes: attempt 1 created the database and crashed
+// mid-restore, so attempt 2 must NOT naively re-run CreateDatabase (which
+// would die with "database already exists"). The tenant's database was
+// reported missing (DriftMissingDatabase) — the only trustworthy state is a
+// restored, verified backup — so any residue must be dropped BEFORE the
+// create, then restore into the freshly created database.
+func TestRestoreTenantFromBackup_PreDropsResidue(t *testing.T) {
+	backupRepo := &stubBackupRepo{backups: []model.Backup{completedBackup(1, "verified.sql")}}
+	auditRepo := &stubAuditRepo{}
+	provider := &stubCloudProvider{}
+
+	a := NewReconcileActivities(nil, auditRepo, backupRepo, provider, nil)
+
+	err := runRestore(t, a, "acme-rec")
+	require.NoError(t, err)
+
+	// The drop MUST precede the create — this is the whole point of the test.
+	require.Equal(t, []string{"drop:acme-rec", "create:acme-rec"}, provider.ops,
+		"crash residue must be pre-dropped before the create (and never after)")
+	require.Contains(t, provider.createdDatabases, "acme-rec")
+	require.Contains(t, provider.restoredTargets, cloud.TenantDatabaseName("acme-rec"))
+	require.Contains(t, provider.restoredFilenames, "verified.sql")
+	require.Equal(t, 1, provider.ownershipRepairs, "ownership must be re-applied after restore")
+	require.Equal(t, 1, provider.validated, "restored database must be validated")
+	require.Len(t, auditRepo.events, 1)
+	assert.Equal(t, model.AuditEventTenantReconcileRestored, auditRepo.events[0].EventType)
+}
+
 // A probe/timeout failure listing backups is a real error, not a sentinel.
 func TestRestoreTenantFromBackup_ListErrorPropagates(t *testing.T) {
 	backupRepo := &stubBackupRepo{err: errors.New("connection reset")}

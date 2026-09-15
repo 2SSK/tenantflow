@@ -8,20 +8,24 @@ import (
 )
 
 // stubCloudProvider implements cloud.CloudProvider with every method failing
-// loudly except InspectDatabase, which the test controls, and the four
-// primitives the reconcile-restore path needs, which are recorded instead of
-// executed (CreateDatabase, RestoreDatabaseFromBackup, EnsureDatabaseOwnership,
-// ValidateDatabase). Recording (rather than panicking) lets a test ASSERT that
-// a create/restore/validate happened — or, with empty slices, that none did.
+// loudly except InspectDatabase, which the test controls, and the primitives
+// the reconcile-restore path needs, which are recorded instead of executed
+// (CreateDatabase, DropDatabase, RestoreDatabaseFromBackup,
+// EnsureDatabaseOwnership, ValidateDatabase). Recording (rather than
+// panicking) lets a test ASSERT that a create/drop/restore/validate happened
+// — or, with empty slices, that none did. ops preserves order across those
+// calls so a test can prove a drop precedes a create.
 type stubCloudProvider struct {
 	state cloud.DatabaseState
 	err   error
 
 	createdDatabases  []string
+	droppedDatabases  []string
 	restoredTargets   []string
 	restoredFilenames []string
 	ownershipRepairs  int
 	validated         int
+	ops               []string
 }
 
 func (s *stubCloudProvider) InspectDatabase(ctx context.Context, dbName string) (cloud.DatabaseState, error) {
@@ -30,6 +34,12 @@ func (s *stubCloudProvider) InspectDatabase(ctx context.Context, dbName string) 
 
 func (s *stubCloudProvider) CreateDatabase(ctx context.Context, tenantID string) error {
 	s.createdDatabases = append(s.createdDatabases, tenantID)
+	s.ops = append(s.ops, "create:"+tenantID)
+	return nil
+}
+func (s *stubCloudProvider) DropDatabase(ctx context.Context, tenantID string) error {
+	s.droppedDatabases = append(s.droppedDatabases, tenantID)
+	s.ops = append(s.ops, "drop:"+tenantID)
 	return nil
 }
 func (s *stubCloudProvider) RestoreDatabaseFromBackup(ctx context.Context, targetDB, backupName string) error {
@@ -44,9 +54,6 @@ func (s *stubCloudProvider) ValidateDatabase(ctx context.Context, dbName string)
 func (s *stubCloudProvider) EnsureDatabaseOwnership(ctx context.Context, dbName string) error {
 	s.ownershipRepairs++
 	return nil
-}
-func (s *stubCloudProvider) DropDatabase(context.Context, string) error {
-	panic("unexpected DropDatabase")
 }
 func (s *stubCloudProvider) DropTenantRole(context.Context, string) error {
 	panic("unexpected DropTenantRole")
