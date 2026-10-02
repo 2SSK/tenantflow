@@ -58,35 +58,52 @@ func run() error {
 	mux.Handle("GET /metrics", reg.Handler())
 
 	srv := &http.Server{
-		Addr: fmt.Sprintf(":%d", a.Config.HTTPPort),
-		// Metrics is outermost so every request is counted; RequestLogger
-		// inside keeps the story-log for each request.
+		Addr:              fmt.Sprintf(":%d", a.Config.HTTPPort),
 		Handler:           middleware.Metrics(reg, middleware.RequestLogger(a.Log, mux)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
+	return serveHTTP(ctx, srv, a.Log)
+}
+
+// shutdownTimeout bounds how long a graceful shutdown waits for in-flight
+// requests to finish before giving up and returning an error.
+const shutdownTimeout = 10 * time.Second
+
+// serveHTTP runs the server until it fails on its own or a termination
+// signal arrives. On a signal it stops accepting new connections and drains
+// in-flight requests within shutdownTimeout — a crash here would drop
+// requests that were already being processed.
+func serveHTTP(ctx context.Context, srv *http.Server, log *slog.Logger) error {
+	// ListenAndServe blocks until the server fails, so it runs on its own
+	// goroutine and reports back through a channel.
 	errCh := make(chan error, 1)
 	go func() {
-		a.Log.Info("listening", "addr", srv.Addr)
+		log.Info("listening", "addr", srv.Addr)
 		errCh <- srv.ListenAndServe()
 	}()
 
+	// The process waits on either the server dying on its own (errCh) or an
+	// operator sending a termination signal (stopCh).
 	stopCh := make(chan os.Signal, 1)
 	signal.Notify(stopCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(stopCh)
 
 	select {
 	case err := <-errCh:
 		return fmt.Errorf("server: %w", err)
 	case sig := <-stopCh:
-		a.Log.Info("shutdown requested", "signal", sig.String())
+		log.Info("shutdown requested", "signal", sig.String())
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Graceful shutdown: Shutdown stops accepting NEW connections and blocks
+	// until in-flight requests finish or the deadline fires, whichever first.
+	shutdownCtx, cancel := context.WithTimeout(ctx, shutdownTimeout)
 	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
+	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("graceful shutdown: %w", err)
 	}
 
-	a.Log.Info("shutdown complete")
+	log.Info("shutdown complete")
 	return nil
 }
