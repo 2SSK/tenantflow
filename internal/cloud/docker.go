@@ -16,6 +16,12 @@ import (
 // backupDir is where pg_dump artifacts live *inside the postgres container*.
 const backupDir = "/tmp/tf-backups"
 
+// postgresContainerName is the canonical control-plane postgres container.
+// docker-compose.yaml sets container_name: tenantflow-postgres and the CI
+// workflow starts postgres with --name tenantflow-postgres, so exact-name
+// matching is deterministic on every environment this provider runs in.
+const postgresContainerName = "tenantflow-postgres"
+
 // safeID matches PostgreSQL identifiers quoted with "...": letters, digits,
 // underscore, and hyphen (real tenant IDs like rbac-admin-final use hyphens).
 // Anchored ^...$ so it must match the WHOLE string. Rejects spaces, quotes,
@@ -331,15 +337,23 @@ func (d *DockerProvider) execPostgres(ctx context.Context, sql string) error {
 	if err != nil {
 		return fmt.Errorf("exec create: %w", err)
 	}
-	if err := d.client.ContainerExecStart(ctx, execResp.ID, container.ExecStartOptions{}); err != nil {
-		return fmt.Errorf("exec start: %w", err)
+	resp, err := d.client.ContainerExecAttach(ctx, execResp.ID, container.ExecAttachOptions{})
+	if err != nil {
+		return fmt.Errorf("exec attach: %w", err)
+	}
+	defer resp.Close()
+
+	var stdout, stderr strings.Builder
+	if _, err := stdcopy.StdCopy(&stdout, &stderr, resp.Reader); err != nil {
+		return fmt.Errorf("exec read: %w", err)
 	}
 	inspect, err := d.client.ContainerExecInspect(ctx, execResp.ID)
 	if err != nil {
 		return fmt.Errorf("exec inspect: %w", err)
 	}
 	if inspect.ExitCode != 0 {
-		return fmt.Errorf("psql exited with code %d running: %s", inspect.ExitCode, sql)
+		return fmt.Errorf("psql exited with code %d running: %s: stderr: %s",
+			inspect.ExitCode, sql, strings.TrimSpace(stderr.String()))
 	}
 	return nil
 }
@@ -398,10 +412,22 @@ func parseBoolOut(out string) bool {
 }
 
 // findPostgresContainer returns the ID of the running postgres container.
+// It prefers the canonical control-plane container by exact name, then falls
+// back to any running container whose name contains "postgres". The fallback
+// keeps dev setups working even when the stack was started with a different
+// project/container name; the exact match protects against picking a stray
+// postgres container from another project running on the same machine.
 func (d *DockerProvider) findPostgresContainer(ctx context.Context) (string, error) {
 	containers, err := d.client.ContainerList(ctx, container.ListOptions{All: false})
 	if err != nil {
 		return "", fmt.Errorf("list containers: %w", err)
+	}
+	for _, c := range containers {
+		for _, name := range c.Names {
+			if strings.TrimPrefix(name, "/") == postgresContainerName {
+				return c.ID, nil
+			}
+		}
 	}
 	for _, c := range containers {
 		for _, name := range c.Names {
