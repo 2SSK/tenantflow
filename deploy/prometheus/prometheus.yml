@@ -5,11 +5,10 @@
 #   API    :9090/metrics  (tenantflow_http_requests_total, go_*, temporal_*)
 #   Worker :9091/metrics  (tenantflow_activity_executions_total, go_*, temporal_*)
 #
-# Run Prometheus on :9092 (the API owns :9090, Prometheus' default) with
-# host networking so the localhost targets below resolve:
-#   docker run -d --name tf-prometheus --network=host \
-#     -v "$PWD/deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
-#     prom/prometheus --config.file=/etc/prometheus/prometheus.yml --web.listen-address=:9092
+# Prometheus runs as the compose service "prometheus" and MUST use host
+# networking (docker-compose.yml sets network_mode: host) so the localhost
+# targets below resolve to the host processes. It serves on :9092 — the API
+# owns :9090, Prometheus' default — via --web.listen-address=:9092.
 global:
   scrape_interval: 5s
   evaluation_interval: 10s

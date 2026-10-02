@@ -191,6 +191,53 @@ services:
     networks:
       - tenantflow
 
+  # ==========================================================================
+  # 9) prometheus — scrapes the HOST processes (API :9090, worker :9091).
+  #    Those binaries run outside compose, so this container must share the
+  #    host network for the localhost targets in prometheus.yml to resolve.
+  #    Serves its own UI on :9092 (the API owns :9090).
+  # ==========================================================================
+  prometheus:
+    image: prom/prometheus:v${PROMETHEUS_VERSION:-3.1.0}
+    container_name: tenantflow-prometheus
+    restart: unless-stopped
+    network_mode: host # localhost targets = host API/worker processes
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.listen-address=:9092
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    logging:
+      driver: "local"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+  # ==========================================================================
+  # 10) grafana — control-plane dashboards. Serves on :3001 because :3000
+  #     belongs to the Next.js web UI. The provisioned datasource targets
+  #     localhost:9092 (the host-network Prometheus); the dashboard JSON
+  #     (dashboards/tenantflow.json) has no datasource on its panels, so it
+  #     falls back to the default datasource, which the provisioning marks
+  #     isDefault.
+  # ==========================================================================
+  grafana:
+    image: grafana/grafana:${GRAFANA_VERSION:-11.5.0}
+    container_name: tenantflow-grafana
+    restart: unless-stopped
+    network_mode: host # datasource URL localhost:9092 = host Prometheus
+    environment:
+      GF_SERVER_HTTP_PORT: "3001"
+      GF_SERVER_ROOT_URL: http://localhost:3001
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    logging:
+      driver: "local"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
 volumes:
   postgres_data:
   keycloak_data:

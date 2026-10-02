@@ -124,7 +124,7 @@ go run ./cmd/worker         # consumes the tenantflow task queue
 |---|---|---|---|
 | API | http://localhost:9090 | Keycloak | http://localhost:8081 |
 | Worker metrics | :9091/metrics | Prometheus | http://localhost:9092 |
-| Temporal UI | http://localhost:8080 | Grafana (admin/admin) | http://localhost:3000 |
+| Temporal UI | http://localhost:8080 | Grafana (admin/admin) | http://localhost:3001 |
 
 ## API
 
