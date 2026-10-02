@@ -1,10 +1,10 @@
 # TenantFlow — case study
 
-*This is the engineering story behind the project: what it actually does, why
+_This is the engineering story behind the project: what it actually does, why
 it is shaped the way it is, and what the numbers show. Companion documents:
 [ROADMAP](../ROADMAP.md) for the build narrative, [failure matrix](failure-matrix.md)
 for the testing philosophy, [load test report](load-test.md) for measured
-behavior, [ADRs](adr/) for decisions.*
+behavior, [ADRs](adr/) for decisions._
 
 ## 1. The problem
 
@@ -14,7 +14,7 @@ isolate it, back it up, migrate it, delete it — and any of those steps can
 die halfway. Killed worker, dropped connection, DB that's already gone,
 concurrent operator clicking the wrong button. A control plane that scrambles
 or corrupts tenant resources loses trust instantly, and a control plane that
-*blocks forever* on half-done work loses operations teams instantly.
+_blocks forever_ on half-done work loses operations teams instantly.
 
 TenantFlow is a small, honest control plane (Go API + worker, Temporal,
 Postgres, Keycloak) built to make one guarantee visible and provable:
@@ -34,10 +34,10 @@ Operators / API clients
       │  HTTPS + bearer (JWT)
       ▼
 ┌────────────────────────┐        ┌──────────────────────────────┐
-│ API (Go, net/http)     │        │ Worker (Go, Temporal client)  │
-│  OIDC middleware       │  starts│  registers:                   │
-│  handler layer         │───────▶│   Provision/Delete/Migrate/   │
-│  repository (Postgres) │        │   Upgrade/Backup/Reconcile    │
+│ API (Go, net/http)     │        │ Worker (Go, Temporal client) │
+│  OIDC middleware       │  starts│  registers:                  │
+│  handler layer         │───────▶│   Provision/Delete/Migrate/  │
+│  repository (Postgres) │        │   Upgrade/Backup/Reconcile   │
 └──────────┬─────────────┘        └──────────────┬───────────────┘
            │                                     │ activities
            ▼                                     ▼
@@ -51,7 +51,7 @@ Operators / API clients
    ┌─────────────────────────────────────────────┐
    │ Provider (cloud.Provider interface)         │
    │  simulate  │  aws/rds  │ (future)           │
-   │  CreateDatabase, BackupDatabase, Restore...  │
+   │  CreateDatabase, BackupDatabase, Restore... │
    └─────────────────────────────────────────────┘
 ```
 
@@ -116,7 +116,7 @@ database, missing backup, `PUBLIC` CONNECT granted, wrong owner.
 
 ### 3.6 The data-safety rule (the hardest lesson)
 
-Active dedicated tenants have *something to lose*. When reconcile finds a
+Active dedicated tenants have _something to lose_. When reconcile finds a
 missing database, restoring from the latest **verified** backup is
 unambiguous; but when there is no verified backup, the tempting "fix" is to
 recreate an empty database and call it converged. That would silently destroy
@@ -163,14 +163,14 @@ one-click restore) and in the load run's healing of 30 stuck tenants.
 Full run details in [load-test.md](load-test.md). Highlights (n=100, c=10,
 soft-delete with 2s grace):
 
-| | shared | dedicated |
-|---|---|---|
-| provision p50/p99 | 0.83 / 1.09 s | 2.00 / 2.52 s |
-| delete p50/p99 | 3.04 / 3.27 s | 7.54 / 8.56 s |
-| postgres CPU max | 222% | 606% |
-| peak connections | 53 | 64 (36% headroom under default 100) |
-| control plane | worker ≤4% CPU, 66 MiB RSS; API ≤1% | same |
-| leftovers | 0 DB / 0 roles / 0 identities, 0 DLQ rows | same |
+|                   | shared                                    | dedicated                           |
+| ----------------- | ----------------------------------------- | ----------------------------------- |
+| provision p50/p99 | 0.83 / 1.09 s                             | 2.00 / 2.52 s                       |
+| delete p50/p99    | 3.04 / 3.27 s                             | 7.54 / 8.56 s                       |
+| postgres CPU max  | 222%                                      | 606%                                |
+| peak connections  | 53                                        | 64 (36% headroom under default 100) |
+| control plane     | worker ≤4% CPU, 66 MiB RSS; API ≤1%       | same                                |
+| leftovers         | 0 DB / 0 roles / 0 identities, 0 DLQ rows | same                                |
 
 - Temporal-server-side durations track the client clock to within ~0.1s at
   every percentile — the workflow engine is not a queueing tax at this scale.

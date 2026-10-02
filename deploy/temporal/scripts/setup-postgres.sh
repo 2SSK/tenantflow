@@ -7,9 +7,9 @@ set -eu
 
 # Fail fast with a clear message if required env vars are missing.
 # Better to crash loudly than connect with empty credentials.
-: "${POSTGRES_SEEDS:?ERROR: POSTGRES_SEEDS environment varialbe is required}"
-: "${POSTGRES_USER:?ERROR: POSTGRES_USER environment varialbe is required}"
-: "${POSTGRES_PWD:?ERROR: POSTGRES_PWD environment varialbe is required}"
+: "${POSTGRES_SEEDS:?ERROR: POSTGRES_SEEDS environment variable is required}"
+: "${POSTGRES_USER:?ERROR: POSTGRES_USER environment variable is required}"
+: "${POSTGRES_PWD:?ERROR: POSTGRES_PWD environment variable is required}"
 
 DB_PORT="${DB_PORT:-5432}"
 

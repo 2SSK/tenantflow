@@ -115,7 +115,7 @@ That run landed in the DLQ, and the operator's **one-call resume** (`POST /retry
 ```bash
 cp .env.example .env        # dev values only — never commit your own .env
 make dev-up                 # PostgreSQL :5433, Temporal :7233/UI :8080, Keycloak :8081
-make dev-setup              # idempotent: tenantflow realm + platform-operator role + client
+make dev-setup              # idempotent: realm + platform-operator/admin roles + client + demo user
 go run ./cmd/api            # :9090 — status at GET /status
 go run ./cmd/worker         # consumes the tenantflow task queue
 ```

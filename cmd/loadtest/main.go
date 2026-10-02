@@ -1,20 +1,3 @@
-// Command loadtest drives the REAL API end-to-end: it provisions N tenants
-// (and optionally soft-deletes them again), polling each tenant until the
-// workflow reaches its terminal-ish state, and prints measured latency
-// distributions. It only reports what it actually observed — no simulated
-// numbers.
-//
-// Usage:
-//
-//	TOKEN=$(curl -fsS -d grant_type=password -d client_id=tenantflow-api \
-//	  -d client_secret=api-secret-123 -d username=<user> -d password=<pass> \
-//	  http://localhost:8081/realms/tenantflow/protocol/openid-connect/token \
-//	  | jq -r .access_token)
-//	go run ./cmd/loadtest -url http://localhost:9090 -token "$TOKEN" \
-//	  -n 100 -c 10 -prefix lt
-//
-// The -delete phase requires the API to have been started with a short
-// TENANTFLOW_DELETE_GRACE_PERIOD (e.g. "2s") so soft deletes finish quickly.
 package main
 
 import (
@@ -32,9 +15,9 @@ import (
 
 type runResult struct {
 	tenantID    string
-	provision   time.Duration // POST -> status active
+	provision   time.Duration
 	provisionOK bool
-	deletion    time.Duration // DELETE -> status deleted
+	deletion    time.Duration
 	deletionOK  bool
 	err         string
 }
@@ -225,15 +208,7 @@ func postJSON(client *http.Client, apiURL, auth string, payload, out interface{}
 	return nil
 }
 
-// pollTenant GETs the tenant detail until it reaches want (or "failed" — a
-// terminal bad state for both phases) or the timeout expires. The two phases
-// want different outcomes: provision waits for "active", delete waits for
-// "deleted". Treating "active" as universal terminal made the delete phase
-// return instantly (the tenant is still active during its grace period) and
-// report every deletion as failed before the workflow even started.
-//
-// auth is the same bearer token used for every other API call: tenant reads
-// are authenticated (Phase 15.4), so the poll must send it too.
+// pollTenant GETs the tenant detail
 func pollTenant(client *http.Client, apiURL, id, auth string, timeout time.Duration, want string) (string, error) {
 	deadline := time.Now().Add(timeout)
 	for {
