@@ -11,7 +11,9 @@ ADMIN_USER="${KEYCLOAK_ADMIN_USER:-admin}"
 ADMIN_PASS="${KEYCLOAK_ADMIN_PASSWORD:-admin}"
 REALM="${TENANTFLOW_KEYCLOAK_REALM:-tenantflow}"
 CLIENT_ID="${TENANTFLOW_KEYCLOAK_CLIENT_ID:-tenantflow-api}"
-CLIENT_SECRET="${TENANTFLOW_KEYCLOAK_SECRET:-}"
+# Must match the API's default (internal/config) and scripts/demo/run-demo.sh.
+# A public client would reject the secret this repo sends everywhere.
+CLIENT_SECRET="${TENANTFLOW_KEYCLOAK_SECRET:-api-secret-123}"
 REDIRECT="${TENANTFLOW_KEYCLOAK_REDIRECT_URL:-http://localhost:3000/callback}"
 
 echo "==> waiting for Keycloak at $BASE"
@@ -53,16 +55,26 @@ ensure_role platform-admin
 
 EXISTING=$(curl -fsS -H "$AUTH" "$BASE/admin/realms/$REALM/clients?clientId=$CLIENT_ID")
 if [ "$(printf '%s' "$EXISTING" | jq 'length')" != "0" ]; then
-    echo "==> client '$CLIENT_ID' exists"
+    UUID=$(printf '%s' "$EXISTING" | jq -r '.[0].id')
+    REP=$(curl -fsS -H "$AUTH" "$BASE/admin/realms/$REALM/clients/$UUID")
+    PUBLIC=$(printf '%s' "$REP" | jq -r .publicClient)
+    DIRECT=$(printf '%s' "$REP" | jq -r .directAccessGrantsEnabled)
+    # GET /client-secret returns 404 when no secret is set (e.g. public client).
+    CUR_SECRET=$({ curl -fsS -H "$AUTH" "$BASE/admin/realms/$REALM/clients/$UUID/client-secret" 2>/dev/null || printf '{"value":""}'; } | jq -r .value)
+    echo "==> client '$CLIENT_ID' exists (publicClient=$PUBLIC, directAccessGrants=$DIRECT)"
+    if [ "$PUBLIC" = "true" ] || [ "$DIRECT" != "true" ] || [ "$CUR_SECRET" != "$CLIENT_SECRET" ]; then
+        echo "==> updating client '$CLIENT_ID' to confidential, direct-access, with the expected secret"
+        # Keycloak 26: PUT with "secret" sets a fixed secret; the dedicated
+        # client-secret endpoint ignores "value" and regenerates instead.
+        curl -fsS -X PUT "$BASE/admin/realms/$REALM/clients/$UUID" -H "$AUTH" -H "$CT" \
+            -d "{\"clientId\":\"$CLIENT_ID\",\"enabled\":true,\"publicClient\":false,\"directAccessGrantsEnabled\":true,\"secret\":\"$CLIENT_SECRET\",\"redirectUris\":[\"$REDIRECT\"]}" >/dev/null
+    fi
 else
     echo "==> creating client '$CLIENT_ID'"
-    if [ -n "$CLIENT_SECRET" ]; then
-        curl -fsS -X POST "$BASE/admin/realms/$REALM/clients" -H "$AUTH" -H "$CT" \
-            -d "{\"clientId\":\"$CLIENT_ID\",\"enabled\":true,\"publicClient\":false,\"secret\":\"$CLIENT_SECRET\",\"redirectUris\":[\"$REDIRECT\"]}" >/dev/null
-    else
-        curl -fsS -X POST "$BASE/admin/realms/$REALM/clients" -H "$AUTH" -H "$CT" \
-            -d "{\"clientId\":\"$CLIENT_ID\",\"enabled\":true,\"publicClient\":true,\"redirectUris\":[\"$REDIRECT\"]}" >/dev/null
-    fi
+    # directAccessGrantsEnabled is required by scripts/demo/run-demo.sh
+    # (password grant) and cmd/loadtest.
+    curl -fsS -X POST "$BASE/admin/realms/$REALM/clients" -H "$AUTH" -H "$CT" \
+        -d "{\"clientId\":\"$CLIENT_ID\",\"enabled\":true,\"publicClient\":false,\"directAccessGrantsEnabled\":true,\"secret\":\"$CLIENT_SECRET\",\"redirectUris\":[\"$REDIRECT\"]}" >/dev/null
 fi
 
 # Demo/load-test user used by scripts/demo/run-demo.sh and cmd/loadtest.
