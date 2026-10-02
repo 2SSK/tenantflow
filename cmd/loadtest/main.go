@@ -7,10 +7,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
 type runResult struct {
@@ -23,8 +27,14 @@ type runResult struct {
 }
 
 func main() {
-	url := flag.String("url", "http://localhost:9090", "API base URL")
-	token := flag.String("token", os.Getenv("TENANTFLOW_LOAD_TOKEN"), "admin bearer token (or env TENANTFLOW_LOAD_TOKEN)")
+	// Mirrors internal/app: if a repo-root .env exists, load it so the
+	// load test behaves identically whether run by hand or by script.
+	if err := godotenv.Load(); err != nil {
+		fmt.Fprintln(os.Stderr, "loadtest: no .env file, relying on environment:", err)
+	}
+
+	url := flag.String("url", defaultAPIURL(), "API base URL (env TENANTFLOW_API_URL, else TENANTFLOW_HTTP_PORT, else :9090)")
+	token := flag.String("token", os.Getenv("TENANTFLOW_LOAD_TOKEN"), "admin bearer token; falls back to env TENANTFLOW_LOAD_TOKEN, then a Keycloak password grant")
 	n := flag.Int("n", 100, "number of tenants")
 	c := flag.Int("c", 10, "concurrency")
 	prefix := flag.String("prefix", "lt", "tenant ID prefix")
@@ -38,8 +48,12 @@ func main() {
 		os.Exit(2)
 	}
 	if *token == "" {
-		fmt.Fprintln(os.Stderr, "missing -token (or TENANTFLOW_LOAD_TOKEN)")
-		os.Exit(2)
+		t, err := fetchKeycloakToken()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "missing token: -token / TENANTFLOW_LOAD_TOKEN unset and auto-login failed:", err)
+			os.Exit(2)
+		}
+		*token = t
 	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
@@ -261,4 +275,59 @@ func summarize(lat []float64) string {
 	}
 	return fmt.Sprintf("p50=%.2f p95=%.2f p99=%.2f mean=%.2f min=%.2f max=%.2f (n=%d)",
 		pct(50), pct(95), pct(99), sum/float64(len(lat)), lat[0], lat[len(lat)-1], len(lat))
+}
+
+// envOr returns os.Getenv(name), or def when the variable is unset/empty.
+func envOr(name, def string) string {
+	if v := os.Getenv(name); v != "" {
+		return v
+	}
+	return def
+}
+
+// defaultAPIURL picks the API base URL: TENANTFLOW_API_URL wins, otherwise
+// http://localhost:<TENANTFLOW_HTTP_PORT|9090>. Keeps `go run ./cmd/loadtest`
+// working against the demo stack (.env sets TENANTFLOW_HTTP_PORT=9090).
+func defaultAPIURL() string {
+	if v := os.Getenv("TENANTFLOW_API_URL"); v != "" {
+		return v
+	}
+	return "http://localhost:" + envOr("TENANTFLOW_HTTP_PORT", "9090")
+}
+
+// fetchKeycloakToken logs the load-test user in with the password grant and
+// returns an access token the API accepts. It reuses the API's own Keycloak
+// env knobs (TENANTFLOW_KEYCLOAK_URL/REALM/CLIENT_ID/SECRET), so it works
+// against the demo stack and CI with no extra configuration. The demo user
+// is loadtest2 (platform-operator + platform-admin, created by
+// deploy/keycloak/setup.sh).
+func fetchKeycloakToken() (string, error) {
+	form := url.Values{
+		"grant_type":    {"password"},
+		"client_id":     {envOr("TENANTFLOW_KEYCLOAK_CLIENT_ID", "tenantflow-api")},
+		"client_secret": {envOr("TENANTFLOW_KEYCLOAK_SECRET", "api-secret-123")},
+		"username":      {envOr("TENANTFLOW_LOAD_USER", "loadtest2")},
+		"password":      {envOr("TENANTFLOW_LOAD_PASS", "loadtest")},
+	}
+	endpoint := strings.TrimRight(envOr("TENANTFLOW_KEYCLOAK_URL", "http://localhost:8081"), "/") +
+		"/realms/" + envOr("TENANTFLOW_KEYCLOAK_REALM", "tenantflow") +
+		"/protocol/openid-connect/token"
+
+	resp, err := http.PostForm(endpoint, form)
+	if err != nil {
+		return "", fmt.Errorf("token request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		AccessToken string `json:"access_token"`
+		Error       string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return "", fmt.Errorf("token response (status %d): %w", resp.StatusCode, err)
+	}
+	if resp.StatusCode != http.StatusOK || body.AccessToken == "" {
+		return "", fmt.Errorf("token response: status %d error=%q", resp.StatusCode, body.Error)
+	}
+	return body.AccessToken, nil
 }
