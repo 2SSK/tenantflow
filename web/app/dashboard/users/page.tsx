@@ -1,7 +1,7 @@
 "use client";
 
 import { useSession } from "next-auth/react";
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -16,55 +16,55 @@ import { Card, CardContent } from "@/components/ui/card";
 import { type KcUser } from "@/lib/types";
 import { Loader2, ChevronDown, ChevronRight, Trash2 } from "lucide-react";
 
+async function fetchUsers(): Promise<KcUser[]> {
+  const res = await fetch("/api/users");
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = (await res.json()) as { users?: KcUser[] };
+  return data.users ?? [];
+}
+
 export default function UsersPage() {
   const { data: session } = useSession();
+  const [expandedUser, setExpandedUser] = useState<string | null>(null);
   const [users, setUsers] = useState<KcUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [expandedUser, setExpandedUser] = useState<string | null>(null);
 
   const isAdmin = session?.user?.realmRoles?.includes("platform-admin");
 
-  const fetchUsers = async () => {
+  const load = useCallback(async () => {
     try {
-      const res = await fetch("/api/users");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setError(null); // clear any stale banner once the fetch succeeds
-      setUsers(data.users ?? []);
+      const data = await fetchUsers();
+      setUsers(data);
+      setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load users");
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  // Initial load once the session reports admin. State updates happen inside
-  // .then callbacks (the "external system subscription" pattern the rule
-  // endorses); a `cancelled` flag keeps late responses from writing to an
-  // unmounted page.
+  // Load once the session says we're an admin — the API rejects non-admins.
+  // Delete/role actions call load() to refresh.
   useEffect(() => {
     if (!isAdmin) return;
-    let cancelled = false;
-    fetch("/api/users")
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = (await res.json()) as { users?: KcUser[] };
-        if (!cancelled) {
-          setError(null); // clear any stale banner once the fetch succeeds
-          setUsers(data.users ?? []);
+    let ignore = false;
+    (async () => {
+      try {
+        const data = await fetchUsers();
+        if (!ignore) {
+          setUsers(data);
+          setError(null);
         }
-      })
-      .catch((err) => {
-        if (!cancelled) {
+      } catch (err) {
+        if (!ignore)
           setError(err instanceof Error ? err.message : "Failed to load users");
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+      } finally {
+        if (!ignore) setLoading(false);
+      }
+    })();
     return () => {
-      cancelled = true;
+      ignore = true;
     };
   }, [isAdmin]);
 
@@ -76,7 +76,7 @@ export default function UsersPage() {
         const body = await res.json();
         throw new Error(body.error || `HTTP ${res.status}`);
       }
-      fetchUsers();
+      await load();
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to delete user");
     }
@@ -98,7 +98,7 @@ export default function UsersPage() {
         const body = await res.json();
         throw new Error(body.error || `HTTP ${res.status}`);
       }
-      fetchUsers();
+      await load();
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to update role");
     }
@@ -132,7 +132,7 @@ export default function UsersPage() {
       )}
       {error && <p className="text-sm text-destructive">{error}</p>}
 
-      {!loading && !error && (
+      {!loading && (
         <Card>
           <CardContent className="p-0">
             <Table>

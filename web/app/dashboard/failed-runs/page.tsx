@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSession } from "next-auth/react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -15,57 +15,55 @@ import {
 import { Loader2, RotateCcw, DatabaseZap } from "lucide-react";
 import type { FailedRun } from "@/lib/types";
 
+async function fetchFailedRuns(): Promise<FailedRun[]> {
+  const res = await fetch("/api/failed-runs");
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = (await res.json()) as { runs?: FailedRun[] };
+  return data.runs ?? [];
+}
+
 // Dead letter queue: workflow runs that exhausted their retries and failed.
 // Each row is an entry point back into the system — replay the workflow.
 export default function FailedRunsPage() {
   const { data: session } = useSession();
+  const [retrying, setRetrying] = useState<string | null>(null);
   const [runs, setRuns] = useState<FailedRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [retrying, setRetrying] = useState<string | null>(null);
 
   const isAdmin = session?.user?.realmRoles?.includes("platform-admin");
 
-  const fetchRuns = async () => {
+  const load = useCallback(async () => {
     try {
-      const res = await fetch("/api/failed-runs");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setError(null); // clear any stale banner once the fetch succeeds
-      setRuns(data.runs ?? []);
+      const data = await fetchFailedRuns();
+      setRuns(data);
+      setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load failed runs");
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  // Initial load once on mount. State updates happen inside .then callbacks
-  // (the "external system subscription" pattern the rule endorses); a
-  // `cancelled` flag keeps late responses from writing to an unmounted page.
+  // Load once when the page opens. Retry calls load() to refresh.
   useEffect(() => {
-    let cancelled = false;
-    fetch("/api/failed-runs")
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = (await res.json()) as { runs?: FailedRun[] };
-        if (!cancelled) {
-          setError(null); // clear any stale banner once the fetch succeeds
-          setRuns(data.runs ?? []);
+    let ignore = false;
+    (async () => {
+      try {
+        const data = await fetchFailedRuns();
+        if (!ignore) {
+          setRuns(data);
+          setError(null);
         }
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setError(
-            err instanceof Error ? err.message : "Failed to load failed runs",
-          );
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+      } catch (err) {
+        if (!ignore)
+          setError(err instanceof Error ? err.message : "Failed to load failed runs");
+      } finally {
+        if (!ignore) setLoading(false);
+      }
+    })();
     return () => {
-      cancelled = true;
+      ignore = true;
     };
   }, []);
 
@@ -79,8 +77,7 @@ export default function FailedRunsPage() {
         const body = await res.json();
         throw new Error(body.error || `HTTP ${res.status}`);
       }
-      // The retried run leaves the DLQ once the workflow restarts.
-      await fetchRuns();
+      await load(); // the run leaves the DLQ, so refresh the list
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to retry run");
     } finally {
@@ -101,7 +98,7 @@ export default function FailedRunsPage() {
           </p>
         </div>
         {isAdmin && (
-          <Button variant="outline" size="sm" onClick={fetchRuns}>
+          <Button variant="outline" size="sm" onClick={() => void load()}>
             <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
             Refresh
           </Button>

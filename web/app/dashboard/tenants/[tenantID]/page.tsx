@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
@@ -26,13 +26,15 @@ type Backup = {
   completedAt?: string;
 };
 
+type TenantDetail = {
+  tenant: Tenant;
+  events: AuditEvent[];
+  backups: Backup[];
+};
+
 export default function TenantDetailPage() {
   const { tenantID } = useParams<{ tenantID: string }>();
   const { data: session } = useSession();
-  const [tenant, setTenant] = useState<Tenant | null>(null);
-  const [events, setEvents] = useState<AuditEvent[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -40,77 +42,79 @@ export default function TenantDetailPage() {
   const [migrating, setMigrating] = useState(false);
   const [backingUp, setBackingUp] = useState(false);
   const [restoringID, setRestoringID] = useState<number | null>(null);
-  const [backups, setBackups] = useState<Backup[]>([]);
   const [retrying, setRetrying] = useState(false);
+  const [data, setData] = useState<TenantDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const isAdmin = session?.user?.realmRoles?.includes("platform-admin");
 
+  // Loads the tenant, its audit events and backups. Re-run after every action.
+  const load = useCallback(async () => {
+    try {
+      const [tenantRes, eventsRes, backupsRes] = await Promise.all([
+        fetch(`/api/tenants/${tenantID}`),
+        fetch(`/api/tenants/${tenantID}/events`),
+        fetch(`/api/tenants/${tenantID}/backups`),
+      ]);
+      if (!tenantRes.ok) throw new Error("Tenant not found");
+      const tenant = (await tenantRes.json()) as Tenant;
+
+      // Events/backups are best-effort: keep the page usable even if they fail.
+      let events: AuditEvent[] = [];
+      if (eventsRes.ok) {
+        events = ((await eventsRes.json()) as { events?: AuditEvent[] }).events ?? [];
+      }
+      let backups: Backup[] = [];
+      if (backupsRes.ok) {
+        backups = ((await backupsRes.json()) as { backups?: Backup[] }).backups ?? [];
+      }
+      setData({ tenant, events, backups });
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load tenant");
+    } finally {
+      setLoading(false);
+    }
+  }, [tenantID]);
+
+  // Load once when the page opens (deps re-run when navigating between tenant
+  // pages). Action handlers below call load() to refresh.
   useEffect(() => {
-    const load = async () => {
-      setLoading(true);
+    let ignore = false;
+    (async () => {
       try {
         const [tenantRes, eventsRes, backupsRes] = await Promise.all([
           fetch(`/api/tenants/${tenantID}`),
           fetch(`/api/tenants/${tenantID}/events`),
           fetch(`/api/tenants/${tenantID}/backups`),
         ]);
+        if (ignore) return;
         if (!tenantRes.ok) throw new Error("Tenant not found");
-        setTenant(await tenantRes.json());
+        const tenant = (await tenantRes.json()) as Tenant;
+
+        // Events/backups are best-effort: keep the page usable even if they fail.
+        let events: AuditEvent[] = [];
         if (eventsRes.ok) {
-          const data = await eventsRes.json();
-          setEvents(data.events ?? []);
+          events = ((await eventsRes.json()) as { events?: AuditEvent[] }).events ?? [];
         }
+        let backups: Backup[] = [];
         if (backupsRes.ok) {
-          const data = await backupsRes.json();
-          setBackups(data.backups ?? []);
+          backups = ((await backupsRes.json()) as { backups?: Backup[] }).backups ?? [];
         }
+        setData({ tenant, events, backups });
+        setError(null);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load");
+        if (!ignore)
+          setError(err instanceof Error ? err.message : "Failed to load tenant");
       } finally {
-        setLoading(false);
+        if (!ignore) setLoading(false);
       }
+    })();
+    return () => {
+      ignore = true;
     };
-    load();
   }, [tenantID]);
-
-  // Re-fetch audit events (used after starting an upgrade so the timeline
-  // picks up the immediately-emitted TENANT_UPGRADING event).
-  const refetchEvents = async () => {
-    try {
-      const res = await fetch(`/api/tenants/${tenantID}/events`);
-      if (res.ok) {
-        const data = await res.json();
-        setEvents(data.events ?? []);
-      }
-    } catch {
-      // ignore transient refresh failures; the user can reload
-    }
-  };
-
-  const refetchBackups = async () => {
-    try {
-      const res = await fetch(`/api/tenants/${tenantID}/backups`);
-      if (res.ok) {
-        const data = await res.json();
-        setBackups(data.backups ?? []);
-      }
-    } catch {
-      // ignore transient refresh failures; the user can reload
-    }
-  };
-
-  // Re-fetch the tenant plus its events. Used after starting a soft-delete
-  // (status flips to "deleting" immediately) or cancelling one (flips back),
-  // so the buttons in the header always match the current workflow state.
-  const refetchTenant = async () => {
-    try {
-      const res = await fetch(`/api/tenants/${tenantID}`);
-      if (res.ok) setTenant(await res.json());
-    } catch {
-      // ignore transient refresh failures; the user can reload
-    }
-    await refetchEvents();
-  };
 
   const handleDelete = async () => {
     setDeleting(true);
@@ -122,11 +126,9 @@ export default function TenantDetailPage() {
         const body = await res.json();
         throw new Error(body.error || `HTTP ${res.status}`);
       }
-      // Soft delete: the tenant enters the 30-day grace period (status
-      // "deleting") but is NOT gone yet — stay on the page so the operator can
-      // see the state and use the "Cancel Deletion" button if they change
-      // their mind.
-      await refetchTenant();
+      // Soft delete: the tenant is NOT gone yet (30-day grace, "deleting"
+      // status) — stay so the operator can cancel if they change their mind.
+      await load();
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to delete tenant");
       setDeleting(false);
@@ -144,9 +146,7 @@ export default function TenantDetailPage() {
         const body = await res.json();
         throw new Error(body.error || `HTTP ${res.status}`);
       }
-      // The cancel signal is delivered asynchronously; the tenant flips back
-      // to "active" within a moment, so refetch to show it.
-      await refetchTenant();
+      await load(); // cancel is async; show the tenant flipping back to active
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to cancel deletion");
     } finally {
@@ -166,9 +166,7 @@ export default function TenantDetailPage() {
         const body = await res.json();
         throw new Error(body.error || `HTTP ${res.status}`);
       }
-      // The workflow restarts asynchronously; the tenant flips back to
-      // "provisioning" within a moment, so refetch to show it.
-      await refetchTenant();
+      await load(); // replay is async; show the flip back to provisioning
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to retry tenant");
     } finally {
@@ -186,9 +184,7 @@ export default function TenantDetailPage() {
         const body = await res.json();
         throw new Error(body.error || `HTTP ${res.status}`);
       }
-      // Re-fetch events to surface the TENANT_UPGRADING event immediately;
-      // later events stream in as the worker runs.
-      await refetchEvents();
+      await load(); // surface the TENANT_UPGRADING event now
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to upgrade tenant");
     } finally {
@@ -206,8 +202,7 @@ export default function TenantDetailPage() {
         const body = await res.json();
         throw new Error(body.error || `HTTP ${res.status}`);
       }
-      // Re-fetch events to surface the TENANT_MIGRATING event immediately.
-      await refetchEvents();
+      await load(); // surface the TENANT_MIGRATING event now
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to migrate tenant");
     } finally {
@@ -225,9 +220,7 @@ export default function TenantDetailPage() {
         const body = await res.json();
         throw new Error(body.error || `HTTP ${res.status}`);
       }
-      // Re-fetch events + backups so the pending record and the
-      // TENANT_BACKING_UP event surface immediately.
-      await Promise.all([refetchEvents(), refetchBackups()]);
+      await load(); // surface the pending backup
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to backup tenant");
     } finally {
@@ -247,9 +240,7 @@ export default function TenantDetailPage() {
         const body = await res.json();
         throw new Error(body.error || `HTTP ${res.status}`);
       }
-      // Re-fetch events so the TENANT_RESTORING event and (eventually) the
-      // TENANT_RESTORED / TENANT_RESTORE_FAILED events surface on the timeline.
-      await refetchEvents();
+      await load(); // surface TENANT_RESTORING now
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to restore tenant");
     } finally {
@@ -266,11 +257,13 @@ export default function TenantDetailPage() {
     );
   }
 
-  if (error) return <p className="text-sm text-destructive">{error}</p>;
-  if (!tenant) return <p className="text-sm text-muted-foreground">Tenant not found</p>;
+  // Full-page error only if the first load failed; a later load failure just
+  // banners while the last good data stays on screen.
+  if (error && !data) return <p className="text-sm text-destructive">{error}</p>;
+  if (!data) return <p className="text-sm text-muted-foreground">Tenant not found</p>;
 
+  const { tenant, events, backups } = data;
   const statusConfig = TENANT_STATUS_CONFIG[tenant.status];
-  // Rollback steps recorded by the saga's compensation paths.
   const compEvents = events.filter(isCompensationEvent);
 
   return (
@@ -451,6 +444,12 @@ export default function TenantDetailPage() {
       </div>
 
       <Separator />
+
+      {error && (
+        <p className="shrink-0 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {error}
+        </p>
+      )}
 
       {/* ── Backups ── */}
       <div className="shrink-0 space-y-2">

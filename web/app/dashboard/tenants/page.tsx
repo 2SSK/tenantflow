@@ -1,7 +1,7 @@
 "use client";
 
 import { useSession } from "next-auth/react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,68 +11,62 @@ import { Separator } from "@/components/ui/separator";
 import { TENANT_STATUS_CONFIG, type Tenant } from "@/lib/types";
 import { Plus, Loader2, Server } from "lucide-react";
 
+async function fetchTenants(): Promise<Tenant[]> {
+  const res = await fetch("/api/tenants");
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = (await res.json()) as { tenants?: Tenant[] };
+  return data.tenants ?? [];
+}
+
 export default function TenantsPage() {
   const { data: session } = useSession();
-  const [tenants, setTenants] = useState<Tenant[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [newTenantID, setNewTenantID] = useState("");
   const [isolationMode, setIsolationMode] = useState<"dedicated" | "shared">("dedicated");
   const [creating, setCreating] = useState(false);
+  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const isAdmin = session?.user?.realmRoles?.includes("platform-admin");
 
-  const fetchTenants = async () => {
-    try {
-      const res = await fetch("/api/tenants");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setError(null); // clear any stale banner once the fetch succeeds
-      setTenants(data.tenants ?? []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load tenants");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Initial load once on mount. State updates happen inside .then callbacks
-  // (the "external system subscription" pattern the rule endorses); a
-  // `cancelled` flag keeps late responses from writing to an unmounted page.
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/tenants")
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = (await res.json()) as { tenants?: Tenant[] };
-        if (!cancelled) {
-          setError(null); // clear any stale banner once the fetch succeeds
-          setTenants(data.tenants ?? []);
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Failed to load tenants");
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+  // Single place that applies fetched data to state (shared by the initial
+  // load and the post-create retry loop).
+  const applyTenants = useCallback((data: Tenant[]) => {
+    setTenants(data);
+    setError(null);
+    setLoading(false);
   }, []);
+
+  // Load once when the page opens.
+  useEffect(() => {
+    let ignore = false;
+    (async () => {
+      try {
+        const data = await fetchTenants();
+        if (!ignore) applyTenants(data);
+      } catch (err) {
+        if (!ignore)
+          setError(err instanceof Error ? err.message : "Failed to load tenants");
+      } finally {
+        if (!ignore) setLoading(false);
+      }
+    })();
+    return () => {
+      ignore = true;
+    };
+  }, [applyTenants]);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newTenantID.trim()) return;
+    const id = newTenantID.trim();
+    if (!id) return;
     setCreating(true);
     try {
       const res = await fetch("/api/tenants", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          tenantID: newTenantID.trim(),
+          tenantID: id,
           isolationMode,
         }),
       });
@@ -81,7 +75,15 @@ export default function TenantsPage() {
         throw new Error(body.error || `HTTP ${res.status}`);
       }
       setNewTenantID("");
-      fetchTenants();
+      // The API answers 202 before the provisioning workflow has written the
+      // tenant row, so one reload can miss it. Re-load briefly until the new
+      // tenant shows up (bounded — not background polling), then stop.
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const list = await fetchTenants();
+        applyTenants(list);
+        if (list.some((t) => t.tenantID === id)) return;
+        await new Promise((r) => setTimeout(r, 400));
+      }
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to create tenant");
     } finally {
@@ -199,8 +201,8 @@ export default function TenantsPage() {
         <p className="text-sm text-destructive">{error}</p>
       )}
 
-      {/* ── Scrollable table ── */}
-      {!loading && !error && (
+      {/* Table */}
+      {!loading && (
         <div className="min-h-0 flex-1 overflow-hidden rounded-xl">
           <div className="h-full overflow-auto">
             <table className="w-full caption-bottom text-sm">
