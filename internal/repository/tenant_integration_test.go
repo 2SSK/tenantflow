@@ -6,11 +6,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/2SSK/tenantflow/internal/database"
 	"github.com/2SSK/tenantflow/internal/model"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -22,15 +24,16 @@ func testPool(t *testing.T) *pgxpool.Pool {
 		url = "postgres://temporal:temporal@localhost:5433/tenantflow?sslmode=disable"
 	}
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, url)
+	// database.New runs the embedded schema migrations, so a blank
+	// database (e.g. the fresh postgres container in CI) is usable here.
+	// This mirrors what cmd/api and cmd/worker do at startup.
+	logger := slog.New(slog.DiscardHandler)
+	db, err := database.New(ctx, url, logger)
 	if err != nil {
-		t.Fatalf("create pool: %v", err)
+		t.Fatalf("open database: %v", err)
 	}
-	if err := pool.Ping(ctx); err != nil {
-		t.Fatalf("ping pool: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	return pool
+	t.Cleanup(db.Close)
+	return db.Pool
 }
 
 func uniqueTenantID(prefix string) string {
