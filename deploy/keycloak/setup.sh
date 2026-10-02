@@ -14,7 +14,7 @@ CLIENT_ID="${TENANTFLOW_KEYCLOAK_CLIENT_ID:-tenantflow-api}"
 # Must match the API's default (internal/config) and scripts/demo/run-demo.sh.
 # A public client would reject the secret this repo sends everywhere.
 CLIENT_SECRET="${TENANTFLOW_KEYCLOAK_SECRET:-api-secret-123}"
-REDIRECT="${TENANTFLOW_KEYCLOAK_REDIRECT_URL:-http://localhost:3000/callback}"
+REDIRECT="${TENANTFLOW_KEYCLOAK_REDIRECT_URL:-http://localhost:3000/api/auth/callback/keycloak}"
 
 echo "==> waiting for Keycloak at $BASE"
 for i in $(seq 1 60); do
@@ -77,32 +77,42 @@ else
         -d "{\"clientId\":\"$CLIENT_ID\",\"enabled\":true,\"publicClient\":false,\"directAccessGrantsEnabled\":true,\"secret\":\"$CLIENT_SECRET\",\"redirectUris\":[\"$REDIRECT\"]}" >/dev/null
 fi
 
-# Demo/load-test user used by scripts/demo/run-demo.sh and cmd/loadtest.
-# Give it both roles: mutations need platform-admin, reads work with either.
-DEMO_USER="${DEMO_USER:-loadtest2}"
-DEMO_PASS="${DEMO_PASS:-loadtest}"
-if curl -fsS -H "$AUTH" "$BASE/admin/realms/$REALM/users?username=$DEMO_USER" \
-    | jq -e 'length > 0' >/dev/null 2>&1; then
-    echo "==> demo user '$DEMO_USER' exists"
-else
-    echo "==> creating demo user '$DEMO_USER'"
-    curl -fsS -X POST "$BASE/admin/realms/$REALM/users" -H "$AUTH" -H "$CT" \
-        -d "{\"username\":\"$DEMO_USER\",\"enabled\":true,\"email\":\"$DEMO_USER@example.com\",\"emailVerified\":true,\"firstName\":\"Load\",\"lastName\":\"Tester\",
-             \"credentials\":[{\"type\":\"password\",\"value\":\"$DEMO_PASS\",\"temporary\":false}]}" >/dev/null
-fi
-USER_ID=$(curl -fsS -H "$AUTH" "$BASE/admin/realms/$REALM/users?username=$DEMO_USER" | jq -r '.[0].id')
-for ROLE in platform-operator platform-admin; do
-    if curl -fsS -H "$AUTH" \
-        "$BASE/admin/realms/$REALM/users/$USER_ID/role-mappings/realm" | jq -e \
-        --arg r "$ROLE" 'any(.name == $r)' >/dev/null 2>&1; then
-        echo "==> user '$DEMO_USER' has role $ROLE"
+# Default users. Both get both roles: mutations need platform-admin, reads
+# work with either. Wrapped in a function so adding users is one line.
+ensure_user() { # username password first-name last-name
+    USERNAME=$1
+    PASSWORD=$2
+    FIRST=$3
+    LAST=$4
+    if curl -fsS -H "$AUTH" "$BASE/admin/realms/$REALM/users?username=$USERNAME" \
+        | jq -e 'length > 0' >/dev/null 2>&1; then
+        echo "==> user '$USERNAME' exists"
     else
-        echo "==> assigning role $ROLE to '$DEMO_USER'"
-        ROLE_REP=$(curl -fsS -H "$AUTH" "$BASE/admin/realms/$REALM/roles/$ROLE")
-        curl -fsS -X POST -H "$AUTH" -H "$CT" \
-            "$BASE/admin/realms/$REALM/users/$USER_ID/role-mappings/realm" \
-            -d "[$ROLE_REP]" >/dev/null
+        echo "==> creating user '$USERNAME'"
+        curl -fsS -X POST "$BASE/admin/realms/$REALM/users" -H "$AUTH" -H "$CT" \
+            -d "{\"username\":\"$USERNAME\",\"enabled\":true,\"email\":\"$USERNAME@example.com\",\"emailVerified\":true,\"firstName\":\"$FIRST\",\"lastName\":\"$LAST\",\"credentials\":[{\"type\":\"password\",\"value\":\"$PASSWORD\",\"temporary\":false}]}" >/dev/null
     fi
-done
+    USER_ID=$(curl -fsS -H "$AUTH" "$BASE/admin/realms/$REALM/users?username=$USERNAME" | jq -r '.[0].id')
+    for ROLE in platform-operator platform-admin; do
+        if curl -fsS -H "$AUTH" \
+            "$BASE/admin/realms/$REALM/users/$USER_ID/role-mappings/realm" | jq -e \
+            --arg r "$ROLE" 'any(.name == $r)' >/dev/null 2>&1; then
+            echo "==> user '$USERNAME' has role $ROLE"
+        else
+            echo "==> assigning role $ROLE to '$USERNAME'"
+            ROLE_REP=$(curl -fsS -H "$AUTH" "$BASE/admin/realms/$REALM/roles/$ROLE")
+            curl -fsS -X POST -H "$AUTH" -H "$CT" \
+                "$BASE/admin/realms/$REALM/users/$USER_ID/role-mappings/realm" \
+                -d "[$ROLE_REP]" >/dev/null
+        fi
+    done
+}
+
+# Demo/load-test user used by scripts/demo/run-demo.sh and cmd/loadtest.
+ensure_user "${DEMO_USER:-loadtest2}" "${DEMO_PASS:-loadtest}" "Load" "Tester"
+
+# Default admin for the web UI. This is the first account for the custom
+# login page. Override with APP_ADMIN_USER / APP_ADMIN_PASS if needed.
+ensure_user "${APP_ADMIN_USER:-tenantflow-admin}" "${APP_ADMIN_PASS:-tenantflow}" "TenantFlow" "Admin"
 
 echo "==> done"

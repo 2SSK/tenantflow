@@ -1,6 +1,7 @@
 "use client";
 
-import { signIn, useSession } from "next-auth/react";
+import { useSession } from "next-auth/react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 
@@ -27,12 +28,12 @@ export default function Home() {
         <p className="text-muted-foreground">
           Multi-tenant SaaS control plane
         </p>
-        <button
-          onClick={() => signIn("keycloak", { callbackUrl: "/dashboard" })}
+        <Link
+          href="/login"
           className="rounded-lg bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
         >
-          Sign in with Keycloak
-        </button>
+          Sign in
+        </Link>
       </main>
     </div>
   );
