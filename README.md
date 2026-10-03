@@ -10,6 +10,16 @@ The interesting part: **a deletion that fails mid-flight is resumed from a DLQ, 
 
 ---
 
+## Preview
+
+[![TenantFlow demo loop — click for the full walkthrough video](docs/screenshots/tenantflow_preview.gif)](docs/screenshots/tenantflow_preview.mp4)
+
+The loop above is a highlight from the one-take demo. Watch the full
+[walkthrough video (mp4)](docs/screenshots/tenantflow_preview.mp4) — provision
+through destroy, chaos-injected failure, DLQ retry, and reconcile (4:40).
+
+---
+
 ## The 60-second story
 
 SaaS platforms quietly get away with "works on my machine" because their state is ephemeral. Tenant provisioning is **stateful and long-running**: a database must exist before an app connects, a half-created tenant must be rolled back, a dropped database must be cleaned up — and the worker may die at any point in between.
