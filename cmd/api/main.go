@@ -14,6 +14,7 @@ import (
 	"github.com/2SSK/tenantflow/internal/cost"
 	"github.com/2SSK/tenantflow/internal/metrics"
 	"github.com/2SSK/tenantflow/internal/middleware"
+	"github.com/2SSK/tenantflow/internal/repository"
 	"github.com/2SSK/tenantflow/internal/router"
 )
 
@@ -54,7 +55,7 @@ func run() error {
 	})
 	reg.MustRegister(cost.NewCollector(costLoader, a.Log))
 
-	mux := router.New(a.TC, a.Repo, a.AuditRepo, a.BackupRepo, a.InstanceRepo, a.Auth, a.Log)
+	mux := router.New(a.TC, a.Repo, a.AuditRepo, a.BackupRepo, a.InstanceRepo, repository.NewPostgresQuotaStore(a.DB.Pool), a.Auth, a.Log)
 	mux.Handle("GET /metrics", reg.Handler())
 
 	srv := &http.Server{

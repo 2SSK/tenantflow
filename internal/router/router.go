@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/2SSK/tenantflow/internal/auth"
+	"github.com/2SSK/tenantflow/internal/billing"
 	"github.com/2SSK/tenantflow/internal/handler"
 )
 
@@ -25,13 +26,13 @@ import (
 //     with the realm's "platform-operator" role that is the read-only tier.
 //   - Every mutation and the failed-runs DLQ additionally require the
 //     "platform-admin" role, enforced by RequireRole.
-func New(tc handler.WorkflowStarter, store handler.TenantStore, auditStore handler.AuditStore, backupStore handler.BackupStore, failedRuns handler.FailedRunStore, authProvider auth.TokenVerifier, log *slog.Logger) *http.ServeMux {
+func New(tc handler.WorkflowStarter, store handler.TenantStore, auditStore handler.AuditStore, backupStore handler.BackupStore, failedRuns handler.FailedRunStore, quotaStore billing.QuotaStore, authProvider auth.TokenVerifier, log *slog.Logger) *http.ServeMux {
 	root := http.NewServeMux()
 
 	// Public endpoints — liveness/readiness only.
 	root.HandleFunc("GET /status", handler.Status)
 
-	tenants := handler.NewTenantHandler(tc, store, auditStore, backupStore, failedRuns, log)
+	tenants := handler.NewTenantHandler(tc, store, auditStore, backupStore, failedRuns, quotaStore, log)
 
 	// Read-only API routes — token required, any authenticated platform user.
 	reader := func(h http.HandlerFunc) http.Handler {
@@ -42,6 +43,7 @@ func New(tc handler.WorkflowStarter, store handler.TenantStore, auditStore handl
 	root.Handle("GET /api/v1/tenants/{tenantID}/events", reader(tenants.ListEvents))
 	root.Handle("GET /api/v1/tenants/{tenantID}/backups", reader(tenants.ListBackups))
 	root.Handle("GET /api/v1/tenants/{tenantID}/cost", reader(tenants.CostTenant))
+	root.Handle("GET /api/v1/tenants/{tenantID}/quota", reader(tenants.GetTenantQuota))
 
 	// Mutating API routes — auth first (token), then the platform-admin role.
 	admin := func(h http.HandlerFunc) http.Handler {

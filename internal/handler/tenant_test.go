@@ -16,6 +16,7 @@ import (
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
 
+	"github.com/2SSK/tenantflow/internal/billing"
 	"github.com/2SSK/tenantflow/internal/cost"
 	"github.com/2SSK/tenantflow/internal/model"
 	"github.com/2SSK/tenantflow/internal/repository"
@@ -128,7 +129,7 @@ func (s *stubTenantStore) TenantResources(ctx context.Context, tenantID string) 
 }
 
 func newTestTenantHandler(s *stubWorkflowStarter, store TenantStore) *TenantHandler {
-	return NewTenantHandler(s, store, &stubAuditStore{}, &stubBackupStore{}, &stubFailedRunStore{}, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	return NewTenantHandler(s, store, &stubAuditStore{}, &stubBackupStore{}, &stubFailedRunStore{}, billing.NewInMemoryQuotaStore(), slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
 }
 
 func TestCreateTenatAccept(t *testing.T) {
@@ -819,7 +820,7 @@ func TestListBackups(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			stub := &stubWorkflowStarter{}
 			bs := &stubBackupStore{backups: backups, err: tt.store.err}
-			h := NewTenantHandler(stub, tt.store, &stubAuditStore{}, bs, &stubFailedRunStore{}, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+			h := NewTenantHandler(stub, tt.store, &stubAuditStore{}, bs, &stubFailedRunStore{}, billing.NewInMemoryQuotaStore(), slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants/acme/backups", nil)
 			req.SetPathValue("tenantID", "acme")
@@ -1023,7 +1024,7 @@ func TestRetryTenant(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			stub := &stubWorkflowStarter{err: tt.startErr}
 			audit := &stubAuditStore{}
-			h := NewTenantHandler(stub, &stubTenantStore{tenant: tt.tenant, err: tt.storeErr}, audit, &stubBackupStore{}, &stubFailedRunStore{failedRun: tt.failedRun, findErr: tt.findErr}, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+			h := NewTenantHandler(stub, &stubTenantStore{tenant: tt.tenant, err: tt.storeErr}, audit, &stubBackupStore{}, &stubFailedRunStore{failedRun: tt.failedRun, findErr: tt.findErr}, billing.NewInMemoryQuotaStore(), slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
 
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/tenants/acme/retry", nil)
 			req.SetPathValue("tenantID", "acme")
@@ -1122,7 +1123,7 @@ func TestListFailedRuns(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			store := &stubFailedRunStore{instances: tt.instances, err: tt.storeErr}
-			h := NewTenantHandler(&stubWorkflowStarter{}, &stubTenantStore{}, &stubAuditStore{}, &stubBackupStore{}, store, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+			h := NewTenantHandler(&stubWorkflowStarter{}, &stubTenantStore{}, &stubAuditStore{}, &stubBackupStore{}, store, billing.NewInMemoryQuotaStore(), slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/failed-runs"+optionalQuery(tt.query), nil)
 			rec := httptest.NewRecorder()

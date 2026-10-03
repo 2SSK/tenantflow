@@ -27,6 +27,15 @@ export type Tenant = {
   updatedAt: string;
 };
 
+// Plan limits for a tenant. They start at the default plan and grow when the
+// upgrade workflow raises quotas (users x2, storage x4, seats x2).
+export type TenantQuota = {
+  tenantID: string;
+  maxUsers: number;
+  maxStorageGB: number;
+  maxSeats: number;
+};
+
 export type AuditEvent = {
   ID: number;
   TenantID: string;

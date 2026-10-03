@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/2SSK/tenantflow/internal/auth"
+	"github.com/2SSK/tenantflow/internal/billing"
 	"github.com/2SSK/tenantflow/internal/cost"
 	"github.com/2SSK/tenantflow/internal/model"
 	"go.temporal.io/sdk/client"
@@ -118,7 +119,7 @@ func newTestRouter(verifier auth.TokenVerifier) http.Handler {
 		},
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return New(&stubStarter{}, store, &stubAuditStore{}, &stubBackupStore{}, &stubFailedRunStore{}, verifier, log)
+	return New(&stubStarter{}, store, &stubAuditStore{}, &stubBackupStore{}, &stubFailedRunStore{}, billing.NewInMemoryQuotaStore(), verifier, log)
 }
 
 func doRequest(t *testing.T, h http.Handler, method, path, token, body string) *httptest.ResponseRecorder {

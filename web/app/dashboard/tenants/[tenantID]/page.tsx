@@ -13,6 +13,7 @@ import {
   AUDIT_EVENT_ICONS,
   isCompensationEvent,
   type Tenant,
+  type TenantQuota,
   type AuditEvent,
 } from "@/lib/types";
 import { ArrowLeft, Loader2, Trash2, Dot, Rocket, DatabaseBackup, RotateCcw, Undo2 } from "lucide-react";
@@ -44,6 +45,7 @@ export default function TenantDetailPage() {
   const [restoringID, setRestoringID] = useState<number | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [data, setData] = useState<TenantDetail | null>(null);
+  const [quota, setQuota] = useState<TenantQuota | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -52,15 +54,16 @@ export default function TenantDetailPage() {
   // Loads the tenant, its audit events and backups. Re-run after every action.
   const load = useCallback(async () => {
     try {
-      const [tenantRes, eventsRes, backupsRes] = await Promise.all([
+      const [tenantRes, eventsRes, backupsRes, quotaRes] = await Promise.all([
         fetch(`/api/tenants/${tenantID}`),
         fetch(`/api/tenants/${tenantID}/events`),
         fetch(`/api/tenants/${tenantID}/backups`),
+        fetch(`/api/tenants/${tenantID}/quota`),
       ]);
       if (!tenantRes.ok) throw new Error("Tenant not found");
       const tenant = (await tenantRes.json()) as Tenant;
 
-      // Events/backups are best-effort: keep the page usable even if they fail.
+      // Events/backups/quota are best-effort: keep the page usable even if they fail.
       let events: AuditEvent[] = [];
       if (eventsRes.ok) {
         events = ((await eventsRes.json()) as { events?: AuditEvent[] }).events ?? [];
@@ -69,7 +72,12 @@ export default function TenantDetailPage() {
       if (backupsRes.ok) {
         backups = ((await backupsRes.json()) as { backups?: Backup[] }).backups ?? [];
       }
+      let nextQuota: TenantQuota | null = null;
+      if (quotaRes.ok) {
+        nextQuota = (await quotaRes.json()) as TenantQuota;
+      }
       setData({ tenant, events, backups });
+      setQuota(nextQuota);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load tenant");
@@ -84,16 +92,17 @@ export default function TenantDetailPage() {
     let ignore = false;
     (async () => {
       try {
-        const [tenantRes, eventsRes, backupsRes] = await Promise.all([
+        const [tenantRes, eventsRes, backupsRes, quotaRes] = await Promise.all([
           fetch(`/api/tenants/${tenantID}`),
           fetch(`/api/tenants/${tenantID}/events`),
           fetch(`/api/tenants/${tenantID}/backups`),
+          fetch(`/api/tenants/${tenantID}/quota`),
         ]);
         if (ignore) return;
         if (!tenantRes.ok) throw new Error("Tenant not found");
         const tenant = (await tenantRes.json()) as Tenant;
 
-        // Events/backups are best-effort: keep the page usable even if they fail.
+        // Events/backups/quota are best-effort: keep the page usable even if they fail.
         let events: AuditEvent[] = [];
         if (eventsRes.ok) {
           events = ((await eventsRes.json()) as { events?: AuditEvent[] }).events ?? [];
@@ -102,7 +111,12 @@ export default function TenantDetailPage() {
         if (backupsRes.ok) {
           backups = ((await backupsRes.json()) as { backups?: Backup[] }).backups ?? [];
         }
+        let nextQuota: TenantQuota | null = null;
+        if (quotaRes.ok) {
+          nextQuota = (await quotaRes.json()) as TenantQuota;
+        }
         setData({ tenant, events, backups });
+        setQuota(nextQuota);
         setError(null);
       } catch (err) {
         if (!ignore)
@@ -185,6 +199,20 @@ export default function TenantDetailPage() {
         throw new Error(body.error || `HTTP ${res.status}`);
       }
       await load(); // surface the TENANT_UPGRADING event now
+
+      // The workflow raises quotas asynchronously after the 202, so one reload
+      // still shows the old plan. Bounded retry (same idea as the create flow):
+      // re-read the quota until it actually grows or ~10s elapse, then stop.
+      const before = quota?.maxUsers ?? 0;
+      for (let attempt = 0; attempt < 10; attempt++) {
+        const qRes = await fetch(`/api/tenants/${tenantID}/quota`);
+        if (qRes.ok) {
+          const q = (await qRes.json()) as TenantQuota;
+          setQuota(q);
+          if (q.maxUsers > before) return;
+        }
+        await new Promise((r) => setTimeout(r, 1000));
+      }
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to upgrade tenant");
     } finally {
@@ -442,6 +470,39 @@ export default function TenantDetailPage() {
           )}
         </div>
       </div>
+
+      {/* ── Plan quotas ── */}
+      {quota && (
+        <div className="shrink-0 space-y-2">
+          <div>
+            <h2 className="text-lg font-semibold">Plan Quotas</h2>
+            <p className="text-sm text-muted-foreground">
+              Upgrading doubles max users and seats and quadruples storage —
+              reload after the workflow completes to see the new limits.
+            </p>
+          </div>
+          <div className="grid gap-4 text-sm sm:grid-cols-3">
+            <Card>
+              <CardContent className="p-3">
+                <p className="text-muted-foreground">Max Users</p>
+                <p className="font-mono text-lg font-bold">{quota.maxUsers}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-3">
+                <p className="text-muted-foreground">Max Storage (GB)</p>
+                <p className="font-mono text-lg font-bold">{quota.maxStorageGB}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-3">
+                <p className="text-muted-foreground">Max Seats</p>
+                <p className="font-mono text-lg font-bold">{quota.maxSeats}</p>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      )}
 
       <Separator />
 

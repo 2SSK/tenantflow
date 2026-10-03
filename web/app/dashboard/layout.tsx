@@ -76,7 +76,7 @@ function ThemeToggle({ collapsed }: { collapsed: boolean }) {
       ) : (
         <Moon className="h-4 w-4" />
       )}
-      <span>Theme</span>
+      <span>{theme === "dark" ? "Light" : "Dark"}</span>
     </Button>
   );
 }

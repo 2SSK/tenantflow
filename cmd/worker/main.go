@@ -16,6 +16,7 @@ import (
 	"github.com/2SSK/tenantflow/internal/app"
 	"github.com/2SSK/tenantflow/internal/chaos"
 	"github.com/2SSK/tenantflow/internal/metrics"
+	"github.com/2SSK/tenantflow/internal/repository"
 	tfworker "github.com/2SSK/tenantflow/internal/worker"
 	tfworkflow "github.com/2SSK/tenantflow/internal/workflow"
 )
@@ -37,7 +38,7 @@ func run() error {
 	}
 	defer a.Close()
 
-	w := tfworker.New(a.TC, a.Repo, a.AuditRepo, a.BackupRepo, a.Provider, a.Identity,
+	w := tfworker.New(a.TC, a.Repo, a.AuditRepo, a.BackupRepo, repository.NewPostgresQuotaStore(a.DB.Pool), a.Provider, a.Identity,
 		a.InstanceRepo,
 		chaos.NewController(a.Config.Chaos.Rate, a.Config.Chaos.Activities), reg, a.Log)
 

@@ -91,6 +91,35 @@ export default function TenantsPage() {
     }
   };
 
+  // States that mean "a workflow is finishing in the next few seconds". Only
+  // these trigger the auto-refresh. "deleting" is deliberately excluded: a
+  // soft-deleted tenant waits out a 30-day grace period, so polling it would
+  // run a timer for a month instead of a moment. The badge for a deleting
+  // tenant simply updates on the next natural reload.
+  const IN_FLIGHT_STATUSES = new Set(["pending", "provisioning"]);
+  const hasInFlight = tenants.some((t) => IN_FLIGHT_STATUSES.has(t.status));
+
+  // Keep the badge fresh while a workflow is mid-flight (e.g. a freshly
+  // created tenant flips provisioning -> active on its own ~1s after the row
+  // appears). This is CONDITIONAL polling, not background polling: when every
+  // tenant is settled (active/failed/deleted) the effect body returns early
+  // and no timer exists at all.
+  useEffect(() => {
+    if (!hasInFlight) return;
+
+    const id = setInterval(() => {
+      void (async () => {
+        try {
+          applyTenants(await fetchTenants());
+        } catch {
+          // Keep the last known list; the next tick retries.
+        }
+      })();
+    }, 2000);
+
+    return () => clearInterval(id);
+  }, [hasInFlight, applyTenants]);
+
   // Group tenants by status
   const activeCount = tenants.filter((t) => t.status === "active").length;
   const provisioningCount = tenants.filter((t) => t.status === "provisioning").length;

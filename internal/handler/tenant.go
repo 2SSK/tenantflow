@@ -15,6 +15,7 @@ import (
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
 
+	"github.com/2SSK/tenantflow/internal/billing"
 	"github.com/2SSK/tenantflow/internal/cost"
 	"github.com/2SSK/tenantflow/internal/model"
 	"github.com/2SSK/tenantflow/internal/repository"
@@ -62,17 +63,19 @@ type TenantHandler struct {
 	auditStore  AuditStore
 	backupStore BackupStore
 	failedRuns  FailedRunStore
+	quotaStore  billing.QuotaStore
 	log         *slog.Logger
 }
 
 // NewTenantHandler wires a TenantHandler with its dependencies.
-func NewTenantHandler(tc WorkflowStarter, store TenantStore, auditStore AuditStore, backupStore BackupStore, failedRuns FailedRunStore, log *slog.Logger) *TenantHandler {
+func NewTenantHandler(tc WorkflowStarter, store TenantStore, auditStore AuditStore, backupStore BackupStore, failedRuns FailedRunStore, quotaStore billing.QuotaStore, log *slog.Logger) *TenantHandler {
 	return &TenantHandler{
 		temporal:    tc,
 		store:       store,
 		auditStore:  auditStore,
 		backupStore: backupStore,
 		failedRuns:  failedRuns,
+		quotaStore:  quotaStore,
 		log:         log,
 	}
 }
@@ -377,6 +380,45 @@ func (h *TenantHandler) CostTenant(w http.ResponseWriter, r *http.Request) {
 		PriceModel: "default",
 		Resources:  res,
 		Estimate:   cost.MonthlyEstimate(res, cost.DefaultModel),
+	})
+}
+
+// QuotaResponse is the GET /api/v1/tenants/{tenantID}/quota body.
+type QuotaResponse struct {
+	TenantID     string `json:"tenantID"`
+	MaxUsers     int    `json:"maxUsers"`
+	MaxStorageGB int    `json:"maxStorageGB"`
+	MaxSeats     int    `json:"maxSeats"`
+}
+
+// GetTenantQuota returns the tenant's current plan limits. These change when
+// the upgrade workflow runs RaiseQuotas (users x2, storage x4, seats x2),
+// which writes them through the same persistent store this handler reads.
+func (h *TenantHandler) GetTenantQuota(w http.ResponseWriter, r *http.Request) {
+	tenantID := r.PathValue("tenantID")
+
+	if _, err := h.store.GetTenant(r.Context(), tenantID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "tenant not found")
+			return
+		}
+		h.log.Error("quota tenant: lookup", "tenantID", tenantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to look up tenant")
+		return
+	}
+
+	q, err := h.quotaStore.Get(r.Context(), tenantID)
+	if err != nil {
+		h.log.Error("quota tenant: read", "tenantID", tenantID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to read quota")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, QuotaResponse{
+		TenantID:     tenantID,
+		MaxUsers:     q.MaxUsers,
+		MaxStorageGB: q.MaxStorageGB,
+		MaxSeats:     q.MaxSeats,
 	})
 }
 

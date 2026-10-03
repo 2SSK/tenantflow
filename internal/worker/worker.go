@@ -30,12 +30,11 @@ type activityRegistration struct {
 	name string
 }
 
-func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, auditRepo repository.AuditRepository, backupRepo repository.BackupRepository, provider cloud.CloudProvider, identityProvider identity.IdentityProvider, instanceRepo repository.WorkflowInstanceRepository, chaosCtrl *chaos.Controller, reg *metrics.Registry, log *slog.Logger) *Worker {
+func New(tc *temporal.Client, repo *repository.PostgresTenantRepository, auditRepo repository.AuditRepository, backupRepo repository.BackupRepository, quotaStore billing.QuotaStore, provider cloud.CloudProvider, identityProvider identity.IdentityProvider, instanceRepo repository.WorkflowInstanceRepository, chaosCtrl *chaos.Controller, reg *metrics.Registry, log *slog.Logger) *Worker {
 	provision := activities.NewProvisionActivities(repo, auditRepo, provider)
 	deprovision := activities.NewDeprovisionActivities(repo, auditRepo, provider)
 	cancelDelete := activities.NewCancelDeleteActivities(repo, auditRepo)
 	identityActs := activities.NewIdentityActivities(identityProvider)
-	quotaStore := billing.NewInMemoryQuotaStore()
 	upgrade := activities.NewUpgradeActivities(repo, auditRepo, quotaStore)
 	migrate := activities.NewMigrateActivities(auditRepo, provider)
 	backup := activities.NewBackupActivities(backupRepo, auditRepo, provider)
